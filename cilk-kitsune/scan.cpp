@@ -204,15 +204,14 @@ using scanner = scan_reducer<T, value_id, value_reduce> cilk_reducer(
 
 namespace kitcuda {
 
-extern "C" void
-__kitcuda_scan(int32_t *view /* local */, int32_t *temp_1 /* local */,
-               int32_t *temp_2 /* local */, int32_t *temp_3 /* local */,
-               int32_t *shmem /* shared */, int32_t *aggregate /* global */,
-               int32_t *inclusive_prefix /* global */,
-               int32_t *scan_state /* global */,
-               size_t size /* must be multiples of 4 */,
-               int32_t *result /* global */, size_t n /* loop trip count */,
-               __cilk_identity_fn identity, __cilk_reduce_fn reduce) noexcept;
+// This function does not actually exist, it's a marker that the compiler will
+// replace with alloca instruction
+extern "C" auto __kitcuda_get_scan_view(size_t size, int32_t *aggregate,
+                                        int32_t *inclusive_prefix,
+                                        int32_t *scan_state,
+                                        int32_t *result,
+                                        __cilk_identity_fn identity,
+                                        __cilk_reduce_fn reduce) -> void *;
 
 // Effectively nullptr, but blocks LLVM's constant propagation
 extern "C" auto __kitcuda_null() noexcept -> void *;
@@ -245,46 +244,13 @@ struct scanner {
           inclusive_prefix{reinterpret_cast<V *>(__kitcuda_null())},
           scan_state{reinterpret_cast<int32_t *>(__kitcuda_null())} {}
 
-    struct view_proxy {
-        using V_int32s = int32_t[sizeof(V) / sizeof(int32_t)];
-        V_int32s view, temp_1, temp_2, temp_3;
-        V *aggregate;
-        V *inclusive_prefix;
-        int32_t *scan_state;
-        V *data;
-        size_t idx;
-
-        // NOLINTBEGIN(*-array-to-pointer-decay)
-        view_proxy(scanner &s, size_t idx) // NOLINT(*-member-init)
-            : aggregate{s.aggregate}, inclusive_prefix{s.inclusive_prefix},
-              scan_state{s.scan_state}, data{s.data}, idx{idx} {
-            value_id(view);
-        }
-        ~view_proxy() {
-            __kitcuda_scan(
-                view, temp_1, temp_2, temp_3,
-                /* compiler gonna replace this with real shmem reference */
-                nullptr, reinterpret_cast<int32_t *>(aggregate),
-                reinterpret_cast<int32_t *>(inclusive_prefix), scan_state,
-                sizeof(V), reinterpret_cast<int32_t *>(data),
-                /* compiler gonna replace this with real trip count */ 0,
-                value_id, value_reduce);
-        }
-        // NOLINTEND(*-array-to-pointer-decay)
-        view_proxy(const view_proxy &) = delete;
-        view_proxy(view_proxy &&other) = delete;
-        auto operator=(const view_proxy &) -> view_proxy & = delete;
-        auto operator=(view_proxy &&other) -> view_proxy & = delete;
-
-        auto operator*() -> V & {
-            return *reinterpret_cast<V *>(reinterpret_cast<char *>(view));
-        }
-        auto operator->() -> V * {
-            return reinterpret_cast<V *>(reinterpret_cast<char *>(view));
-        }
-    };
-
-    auto view(T &_array, size_t idx) -> view_proxy { return {*this, idx}; }
+    auto view(T &_array, size_t idx) -> V * {
+        return reinterpret_cast<V *>(__kitcuda_get_scan_view(
+            sizeof(V), reinterpret_cast<int32_t *>(aggregate),
+            reinterpret_cast<int32_t *>(inclusive_prefix),
+            reinterpret_cast<int32_t *>(scan_state),
+            reinterpret_cast<int32_t *>(data), value_id, value_reduce));
+    }
 };
 } // namespace kitcuda
 
