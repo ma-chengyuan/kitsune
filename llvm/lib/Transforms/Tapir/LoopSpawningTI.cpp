@@ -995,9 +995,15 @@ LoopOutlineProcessor *LoopSpawningImpl::getOutlineProcessor(TapirLoopInfo *TL) {
   }
 
   // Allow the Tapir target to define a custom loop-outline processor.
-  if (LoopOutlineProcessor *TargetLOP =
-          Targets[TLTID]->getLoopOutlineProcessor(TL))
+  LoopOutlineProcessor *TargetLOP = Targets[TLTID]->getLoopOutlineProcessor(TL);
+  if (TargetLOP)
     return TargetLOP;
+
+  // If the CUDA target returned nullptr, this loop should not be outlined
+  // (e.g., it's a nested inner loop transformed in-place). Don't fall
+  // through to default processors.
+  if (TLTID == TapirTargetID::Cuda)
+    return nullptr;
 
   switch (Hints.getStrategy()) {
   case TapirLoopHints::ST_DAC:
@@ -1233,6 +1239,11 @@ void LoopSpawningImpl::getAllTapirLoopInputs(
   for (Task *T : post_order(TI.getRootTask())) {
     if (TapirLoopInfo *TL = getTapirLoop(T)) {
       Loop *L = TL->getLoop();
+
+      // Skip loops that weren't prepared for outlining (e.g., nested inner loops).
+      // These loops don't have a primary induction variable and won't be outlined.
+      if (!TL->hasPrimaryInduction())
+        continue;
 
       // Convert inputs for task T to Tapir-loop inputs.
       ValueSet TLInputs = getTapirLoopInputs(TL, TaskInputs[T]);
@@ -1523,8 +1534,18 @@ Function *LoopSpawningImpl::createHelperForTapirLoop(
 /// Outline all recorded Tapir loops in the function.
 TaskOutlineMapTy LoopSpawningImpl::outlineAllTapirLoops() {
   // Prepare Tapir loops for outlining.
+  // Check if each loop should be outlined BEFORE calling prepareForOutlining,
+  // so that inner nested CUDA loops can be skipped without being marked
+  // un-outlineable. Skipped loops remain as Tapir and get transformed
+  // in-place during the parent kernel's postProcessOutline phase.
   for (Task *T : post_order(TI.getRootTask())) {
     if (TapirLoopInfo *TL = getTapirLoop(T)) {
+      LoopOutlineProcessor *Processor = getOutlineProcessor(TL);
+      if (!Processor) {
+        forgetTapirLoop(TL);
+        continue;
+      }
+
       PredicatedScalarEvolution PSE(SE, *TL->getLoop());
       bool CanOutline = TL->prepareForOutlining(DT, LI, TI, PSE, AC, LS_NAME,
                                                 ORE, TTI);
@@ -1533,12 +1554,11 @@ TaskOutlineMapTy LoopSpawningImpl::outlineAllTapirLoops() {
         TapirLoopHints Hints(L);
         emitMissedWarning(L, Hints, &ORE);
         forgetTapirLoop(TL);
+        delete Processor;
         continue;
       }
 
-      // Get an outline processor for each Tapir loop.
-      OutlineProcessors[TL] =
-        std::unique_ptr<LoopOutlineProcessor>(getOutlineProcessor(TL));
+      OutlineProcessors[TL] = std::unique_ptr<LoopOutlineProcessor>(Processor);
     }
   }
 
@@ -1567,6 +1587,8 @@ TaskOutlineMapTy LoopSpawningImpl::outlineAllTapirLoops() {
                          TimePassesIsEnabled);
     for (Task *SubT : T->subtasks()) {
       if (TapirLoopInfo *TL = getTapirLoop(SubT)) {
+        if (OutlineProcessors.find(TL) == OutlineProcessors.end())
+          continue;
         // emitSCEVChecks(TL->getLoop(), TL->getBypass());
         Loop *L = TL->getLoop();
         TaskToOutline[SubT].replaceReplCall(
@@ -1577,6 +1599,9 @@ TaskOutlineMapTy LoopSpawningImpl::outlineAllTapirLoops() {
 
     TapirLoopInfo *TL = getTapirLoop(T);
     if (!TL)
+      continue;
+
+    if (OutlineProcessors.find(TL) == OutlineProcessors.end())
       continue;
 
     Loop *L = TL->getLoop();

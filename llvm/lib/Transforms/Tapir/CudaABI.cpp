@@ -304,13 +304,34 @@ std::string virtualArchForCudaArch(StringRef Arch) {
 }
 
 std::string PTXVersionFromCudaVersion() {
-#ifdef CUDATOOLKIT_VERSION
   std::string CudaVersion;
   raw_string_ostream ss(CudaVersion);
-  ss << CUDATOOLKIT_VERSION_MAJOR << "." << CUDATOOLKIT_VERSION_MINOR;
-#else
-#pragma error("cuabi: CUDA Toolkit version info required for transform!")
-#endif
+  
+  // Convert macros to strings to check if they're empty
+  #define STRINGIFY(x) #x
+  #define TO_STRING(x) STRINGIFY(x)
+  
+  std::string major_str = TO_STRING(CUDATOOLKIT_VERSION_MAJOR);
+  std::string minor_str = TO_STRING(CUDATOOLKIT_VERSION_MINOR);
+  
+  // Remove quotes if present (when macro is empty string "")
+  if (major_str.size() >= 2 && major_str[0] == '"' && major_str.back() == '"') {
+    major_str = major_str.substr(1, major_str.size() - 2);
+  }
+  if (minor_str.size() >= 2 && minor_str[0] == '"' && minor_str.back() == '"') {
+    minor_str = minor_str.substr(1, minor_str.size() - 2);
+  }
+  
+  // Check if we have valid version numbers
+  if (!major_str.empty() && !minor_str.empty()) {
+    ss << major_str << "." << minor_str;
+  } else {
+    // Default to CUDA 12.0 if version not provided
+    ss << "12.0";
+  }
+  
+  #undef TO_STRING
+  #undef STRINGIFY
   LLVM_DEBUG(dbgs() << "cuabi: cuda toolkit version: " << CudaVersion << "\n");
 
   std::string PTXVersionStr =
@@ -340,6 +361,8 @@ std::string PTXVersionFromCudaVersion() {
           .Case("12.5", "+ptx83")
           .Case("12.8", "+ptx83")
           .Case("12.9", "+ptx83")
+          .Case("13.0", "+ptx83")
+          .Case("13.1", "+ptx83")
           .Default("");
 
   if (PTXVersionStr == "") {
@@ -390,6 +413,32 @@ std::pair<DebugLoc, DebugLoc> getFirstAndLastDebugLoc(Function *F) {
 }
 
 } // namespace
+
+/// Check GPU parallelism level from loop metadata.
+/// Returns true if this loop has threadparallel pragma (inner loop).
+/// Returns false if this loop has blockparallel pragma (outer loop) or no pragma.
+static bool isThreadParallelLoop(const Loop *L) {
+  MDNode *LoopID = L->getLoopID();
+  if (!LoopID)
+    return false;
+  
+  // Check for tapir.loop.gpu.threadparallel metadata
+  for (unsigned i = 1, e = LoopID->getNumOperands(); i < e; ++i) {
+    MDNode *MD = dyn_cast<MDNode>(LoopID->getOperand(i));
+    if (!MD)
+      continue;
+    
+    MDString *S = dyn_cast<MDString>(MD->getOperand(0));
+    if (!S)
+      continue;
+    
+    if (S->getString() == "tapir.loop.gpu.threadparallel") {
+      LLVM_DEBUG(dbgs() << "cuabi: detected threadparallel loop\n");
+      return true;
+    }
+  }
+  return false;
+}
 
 // Helper function to configure the details of our post-Tapir transformation
 // passes.
@@ -470,6 +519,16 @@ CudaLoop::CudaLoop(Module &M, Module &KernelModule, const std::string &KN,
       VoidPtrPtrTy,                    // arguments
       Int64Ty,                         // trip count
       Int32Ty,                         // threads-per-block
+      KernelInstMixTy->getPointerTo(), // instruction mix info
+      VoidPtrTy);                      // opaque cuda stream
+
+  KitCudaLaunchNestedFn = M.getOrInsertFunction(
+      "__kitcuda_launch_kernel_nested",
+      VoidPtrTy,                       // return an opaque stream
+      VoidPtrTy,                       // fat-binary
+      VoidPtrTy,                       // kernel name
+      VoidPtrPtrTy,                    // arguments
+      Int64Ty,                         // num_blocks (outer loop trips)
       KernelInstMixTy->getPointerTo(), // instruction mix info
       VoidPtrTy);                      // opaque cuda stream
 
@@ -834,6 +893,48 @@ void CudaLoop::postProcessOutline(TapirLoopInfo &TLI, TaskOutlineInfo &Out,
   // 63)));
   Annotations->addOperand(MDNode::get(Ctx, AV));
 
+  // Mark pointer arguments as readonly/noalias when they are only used for
+  // loads (via GEP chains). This enables the NVPTX backend to use
+  // ld.global.nc (read-only / texture cache) for read-only data like twiddle
+  // factor tables.
+  for (unsigned I = 0, E = KernelF->arg_size(); I < E; ++I) {
+    Argument *Arg = KernelF->getArg(I);
+    if (!Arg->getType()->isPointerTy())
+      continue;
+    bool OnlyLoads = true;
+    bool HasLoad = false;
+    SmallVector<Value *, 16> Worklist;
+    SmallPtrSet<Value *, 16> Visited;
+    Worklist.push_back(Arg);
+    while (!Worklist.empty() && OnlyLoads) {
+      Value *V = Worklist.pop_back_val();
+      if (!Visited.insert(V).second)
+        continue;
+      for (User *UU : V->users()) {
+        if (auto *LI = dyn_cast<LoadInst>(UU)) {
+          HasLoad = true;
+        } else if (auto *SI = dyn_cast<StoreInst>(UU)) {
+          if (SI->getPointerOperand() == V) {
+            OnlyLoads = false;
+            break;
+          }
+        } else if (isa<GetElementPtrInst>(UU)) {
+          Worklist.push_back(UU);
+        } else {
+          // Unknown use (call, atomicrmw, etc.) — be conservative
+          OnlyLoads = false;
+          break;
+        }
+      }
+    }
+    if (OnlyLoads && HasLoad) {
+      KernelF->addParamAttr(I, Attribute::ReadOnly);
+      KernelF->addParamAttr(I, Attribute::NoAlias);
+      LLVM_DEBUG(dbgs() << "cuabi: marked kernel arg #" << I
+                        << " as readonly noalias\n");
+    }
+  }
+
   // Verify that the Thread ID corresponds to a valid iteration.  Because
   // Tapir loops use canonical induction variables, valid iterations range
   // from 0 to the loop limit with stride 1.  The End argument encodes the
@@ -857,42 +958,127 @@ void CudaLoop::postProcessOutline(TapirLoopInfo &TLI, TaskOutlineInfo &Out,
 
   IRBuilder<> B(Entry->getTerminator());
 
-  // Get the thread ID for this invocation of Helper.
-  //
-  // This is the classic CUDA thread ID calculation:
-  //      i = blockDim.x * blockIdx.x + threadIdx.x;
-  // For now we only generate 1-D thread IDs.
-  Value *ThreadIdx = B.CreateCall(CUThreadIdxX);
-  Value *BlockIdx = B.CreateCall(CUBlockIdxX);
-  Value *BlockDim = B.CreateCall(CUBlockDimX);
-  Value *ThreadIV = B.CreateIntCast(
-      B.CreateAdd(ThreadIdx, B.CreateMul(BlockIdx, BlockDim, "blk_offset"),
-                  "cuthread_id"),
-      PrimaryIV->getType(), false, "thread_iv");
+  // Check if this kernel contains nested tapir loops by looking for detach
+  // instructions. If present, the outer loop uses blockIdx and inner loops
+  // use threadIdx.
+  bool HasNestedThreadLoops = false;
+  int DetachCount = 0;
 
-  // NOTE/TODO: Assuming that the grainsize is fixed at 1 for the
-  // current codegen...
-  // ThreadID = B.CreateMul(ThreadID, Grainsize);
-  Value *ThreadEnd = B.CreateAdd(ThreadIV, Grainsize, "thread_end");
-  Value *Cond = B.CreateICmpUGE(ThreadIV, End, "cond_thread_end");
-  ReplaceInstWithInst(Entry->getTerminator(),
-                      BranchInst::Create(Exit, Header, Cond));
+  for (BasicBlock &BB : *KernelF)
+    for (Instruction &I : BB)
+      if (isa<DetachInst>(&I))
+        DetachCount++;
 
-  // Use the thread ID as the start iteration number for the primary IV.
-  PrimaryIVInput->replaceAllUsesWith(ThreadIV);
-  // TODO: ???? PrimaryIVInput->eraseFromParent();
+  if (DetachCount > 0) {
+    HasNestedThreadLoops = true;
+    MDNode *NestedMD = MDNode::get(Ctx, MDString::get(Ctx, "cuda.kernel.nested"));
+    KernelF->setMetadata("cuda.kernel.nested", NestedMD);
+    LLVM_DEBUG(dbgs() << "cuabi: nested parallelism detected (" << DetachCount
+                      << " detach(es)), using block/thread split\n");
+  }
 
-  // Update cloned loop condition to use the thread-end value.
-  unsigned TripCountIdx = 0;
-  ICmpInst *ClonedCond = cast<ICmpInst>(VMap[TLI.getCondition()]);
-  if (ClonedCond->getOperand(0) != End)
-    ++TripCountIdx;
-  assert(ClonedCond->getOperand(TripCountIdx) == End &&
-         "End argument not used in condition!");
-  ClonedCond->setOperand(TripCountIdx, ThreadEnd);
+  Value *BlockIV;
+  if (HasNestedThreadLoops) {
+    // This is a block-parallel loop - use only blockIdx for the outer loop IV
+    LLVM_DEBUG(dbgs() << "cuabi: generating block-level parallelism (blockIdx only)\n");
+    Value *BlockIdx = B.CreateCall(CUBlockIdxX);
+    BlockIV = B.CreateIntCast(BlockIdx, PrimaryIV->getType(), false, "block_iv");
+    
+    // Block loop: each block handles one iteration
+    Value *BlockEnd = B.CreateAdd(BlockIV, Grainsize, "block_end");
+    Value *Cond = B.CreateICmpUGE(BlockIV, End, "cond_block_end");
+    ReplaceInstWithInst(Entry->getTerminator(),
+                        BranchInst::Create(Exit, Header, Cond));
+    
+    // Use the block ID as the start iteration number for the primary IV.
+    // IMPORTANT: For nested loops, we must ONLY update the PHI node, not all uses!
+    // Using replaceAllUsesWith would break inner loops that might use the same value.
+    PrimaryIV->setIncomingValueForBlock(Entry, BlockIV);
+    
+    // Update cloned loop condition to use the block-end value.
+    unsigned TripCountIdx = 0;
+    ICmpInst *ClonedCond = cast<ICmpInst>(VMap[TLI.getCondition()]);
+    if (ClonedCond->getOperand(0) != End)
+      ++TripCountIdx;
+    assert(ClonedCond->getOperand(TripCountIdx) == End &&
+           "End argument not used in condition!");
+    ClonedCond->setOperand(TripCountIdx, BlockEnd);
+  } else {
+    // Standard single-level parallel loop - use full thread ID calculation
+    LLVM_DEBUG(dbgs() << "cuabi: generating thread-level parallelism (blockIdx + threadIdx)\n");
+    
+    // This is the classic CUDA thread ID calculation:
+    //      i = blockDim.x * blockIdx.x + threadIdx.x;
+    // For now we only generate 1-D thread IDs.
+    Value *ThreadIdx = B.CreateCall(CUThreadIdxX);
+    Value *BlockIdx = B.CreateCall(CUBlockIdxX);
+    Value *BlockDim = B.CreateCall(CUBlockDimX);
+    Value *ThreadIV = B.CreateIntCast(
+        B.CreateAdd(ThreadIdx, B.CreateMul(BlockIdx, BlockDim, "blk_offset"),
+                    "cuthread_id"),
+        PrimaryIV->getType(), false, "thread_iv");
+
+    // NOTE/TODO: Assuming that the grainsize is fixed at 1 for the
+    // current codegen...
+    // ThreadID = B.CreateMul(ThreadID, Grainsize);
+    Value *ThreadEnd = B.CreateAdd(ThreadIV, Grainsize, "thread_end");
+    Value *Cond = B.CreateICmpUGE(ThreadIV, End, "cond_thread_end");
+    ReplaceInstWithInst(Entry->getTerminator(),
+                        BranchInst::Create(Exit, Header, Cond));
+
+    // Use the thread ID as the start iteration number for the primary IV.
+    PrimaryIVInput->replaceAllUsesWith(ThreadIV);
+    
+    // Update cloned loop condition to use the thread-end value.
+    unsigned TripCountIdx = 0;
+    ICmpInst *ClonedCond = cast<ICmpInst>(VMap[TLI.getCondition()]);
+    if (ClonedCond->getOperand(0) != End)
+      ++TripCountIdx;
+    assert(ClonedCond->getOperand(TripCountIdx) == End &&
+           "End argument not used in condition!");
+    ClonedCond->setOperand(TripCountIdx, ThreadEnd);
+  }
+
+  // For reducers and scanners, we need ThreadIdx and BlockDim values
+  // Ensure they're available regardless of loop type
+  // IMPORTANT: Create a new IRBuilder because we replaced Entry's terminator above
+  IRBuilder<> B2(Entry->getTerminator());
+  Value *ThreadIdx = B2.CreateCall(CUThreadIdxX);
+  Value *BlockDim = B2.CreateCall(CUBlockDimX);
 
   fixReducersInKernel(KernelF, ThreadIdx, BlockDim, VMap);
   fixScannersInKernel(KernelF, End, VMap);
+  
+  // If this kernel has nested thread-parallel loops, transform them now
+  if (HasNestedThreadLoops) {
+    transformThreadParallelLoops(KernelF, BlockIV, VMap);
+  }
+  
+  // Strip llvm.loop.unroll.disable metadata from ALL loops in the kernel,
+  // even for non-nested kernels. This prevents the NVPTX backend from emitting
+  // .pragma "nounroll" which blocks ptxas from optimizing GPU loops.
+  for (BasicBlock &BB : *KernelF) {
+    Instruction *Term = BB.getTerminator();
+    if (MDNode *LoopMD = Term->getMetadata(LLVMContext::MD_loop)) {
+      bool HasUnrollDisable = false;
+      for (unsigned i = 1, e = LoopMD->getNumOperands(); i < e; ++i) {
+        if (MDNode *Op = dyn_cast<MDNode>(LoopMD->getOperand(i))) {
+          if (Op->getNumOperands() > 0) {
+            if (MDString *S = dyn_cast<MDString>(Op->getOperand(0))) {
+              if (S->getString() == "llvm.loop.unroll.disable") {
+                HasUnrollDisable = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+      if (HasUnrollDisable) {
+        Term->setMetadata(LLVMContext::MD_loop, nullptr);
+      }
+    }
+  }
+  
   fixDebugInfoInKernel(KernelF);
 
   if (KeepIntermediateFiles) {
@@ -904,6 +1090,268 @@ void CudaLoop::postProcessOutline(TapirLoopInfo &TLI, TaskOutlineInfo &Out,
     KernelModule.print(PostLoopIRFile->os(), nullptr);
     PostLoopIRFile->keep();
   }
+}
+
+void CudaLoop::transformThreadParallelLoops(Function *KernelF, Value *BlockIV,
+                                            ValueToValueMapTy &VMap) {
+  LLVM_DEBUG(dbgs() << "cuabi: transforming nested thread-parallel loops in kernel '"
+                    << KernelF->getName() << "'\n");
+
+  // Find all leaf tapir loops (have detach but no nested tapir sub-loops).
+  SmallVector<Loop *, 4> ThreadParallelLoops;
+  DominatorTree DT(*KernelF);
+  LoopInfo LI(DT);
+
+  std::function<void(Loop*)> ProcessLoop = [&](Loop *L) {
+    bool HasDetach = false;
+    for (BasicBlock *BB : L->blocks()) {
+      for (Instruction &I : *BB) {
+        if (isa<DetachInst>(&I)) { HasDetach = true; break; }
+      }
+      if (HasDetach) break;
+    }
+
+    bool HasNestedTapirLoop = false;
+    for (Loop *SubL : L->getSubLoops()) {
+      for (BasicBlock *BB : SubL->blocks()) {
+        for (Instruction &I : *BB) {
+          if (isa<DetachInst>(&I)) { HasNestedTapirLoop = true; break; }
+        }
+        if (HasNestedTapirLoop) break;
+      }
+      if (HasNestedTapirLoop) break;
+    }
+
+    if (HasDetach && !HasNestedTapirLoop) {
+      ThreadParallelLoops.push_back(L);
+      LLVM_DEBUG(dbgs() << "  found leaf tapir loop at header "
+                        << L->getHeader()->getName() << "\n");
+    }
+
+    for (Loop *SubL : L->getSubLoops())
+      ProcessLoop(SubL);
+  };
+
+  for (Loop *L : LI)
+    ProcessLoop(L);
+
+  LLVM_DEBUG(dbgs() << "  " << ThreadParallelLoops.size()
+                    << " thread-parallel loop(s) to transform\n");
+
+  // Transform each thread-parallel loop.
+  for (Loop *L : ThreadParallelLoops) {
+    BasicBlock *Header = L->getHeader();
+    BasicBlock *Preheader = L->getLoopPreheader();
+    BasicBlock *Latch = L->getLoopLatch();
+
+    if (!Header || !Latch)
+      continue;
+
+    if (!Preheader) {
+      Preheader = InsertPreheaderForLoop(L, &DT, &LI, nullptr, true);
+      if (!Preheader)
+        continue;
+    }
+
+    // Find the induction variable PHI node.
+    PHINode *IV = nullptr;
+    for (PHINode &Phi : Header->phis()) {
+      if (Phi.getType()->isIntegerTy() && Phi.getBasicBlockIndex(Preheader) >= 0) {
+        IV = &Phi;
+        break;
+      }
+    }
+
+    if (!IV) {
+      LLVM_DEBUG(dbgs() << "  warning: no suitable IV PHI found, skipping loop\n");
+      continue;
+    }
+
+    LLVM_DEBUG(dbgs() << "  transforming loop with IV: " << *IV << "\n");
+
+    Value *Start = IV->getIncomingValueForBlock(Preheader);
+    Value *Next = IV->getIncomingValueForBlock(Latch);
+
+    // If the start value was incorrectly set to block_iv, reset to 0.
+    if (Start->hasName() && Start->getName().starts_with("block_iv")) {
+      Start = ConstantInt::get(IV->getType(), 0);
+      IV->setIncomingValueForBlock(Preheader, Start);
+    }
+
+    // Each thread starts at: start + threadIdx.x, strides by blockDim.x.
+    IRBuilder<> B(Preheader->getTerminator());
+    Value *ThreadIdx = B.CreateCall(CUThreadIdxX);
+    Value *ThreadIV = B.CreateIntCast(ThreadIdx, IV->getType(), false, "thread_idx");
+    Value *ThreadIterator = B.CreateAdd(Start, ThreadIV, "thread_iter");
+    IV->setIncomingValueForBlock(Preheader, ThreadIterator);
+
+    // Change stride from 1 to blockDim.x.
+    if (Instruction *IncInst = dyn_cast<Instruction>(Next)) {
+      if (IncInst->getOpcode() == Instruction::Add) {
+        Value *OtherOp = nullptr;
+        if (IncInst->getOperand(0) == IV)
+          OtherOp = IncInst->getOperand(1);
+        else if (IncInst->getOperand(1) == IV)
+          OtherOp = IncInst->getOperand(0);
+
+        if (OtherOp) {
+          IRBuilder<> LatchBuilder(IncInst);
+          Value *BlockDim = LatchBuilder.CreateCall(CUBlockDimX);
+          Value *BlockDimCast = LatchBuilder.CreateIntCast(BlockDim, IV->getType(), false, "blockDim_x");
+          if (IncInst->getOperand(0) == IV)
+            IncInst->setOperand(1, BlockDimCast);
+          else
+            IncInst->setOperand(0, BlockDimCast);
+          LLVM_DEBUG(dbgs() << "  stride changed to blockDim.x\n");
+        }
+      }
+    }
+
+    // Fix exit condition: change == to >= so strided loop terminates correctly.
+    BasicBlock *ExitingBB = L->getExitingBlock();
+    if (!ExitingBB)
+      ExitingBB = Latch;
+    if (ExitingBB) {
+      BranchInst *ExitBranch = dyn_cast<BranchInst>(ExitingBB->getTerminator());
+      if (ExitBranch && ExitBranch->isConditional()) {
+        ICmpInst *ExitCond = dyn_cast<ICmpInst>(ExitBranch->getCondition());
+        if (ExitCond) {
+          ICmpInst::Predicate OldPred = ExitCond->getPredicate();
+          ICmpInst::Predicate NewPred = OldPred;
+          bool ExitOnTrue = !L->contains(ExitBranch->getSuccessor(0));
+
+          if (ExitOnTrue) {
+            if (OldPred == ICmpInst::ICMP_EQ)  NewPred = ICmpInst::ICMP_SGE;
+            else if (OldPred == ICmpInst::ICMP_UGT) NewPred = ICmpInst::ICMP_UGE;
+            else if (OldPred == ICmpInst::ICMP_SGT) NewPred = ICmpInst::ICMP_SGE;
+          } else {
+            if (OldPred == ICmpInst::ICMP_NE)  NewPred = ICmpInst::ICMP_SLT;
+          }
+
+          if (NewPred != OldPred)
+            ExitCond->setPredicate(NewPred);
+        }
+      }
+    }
+
+    // Add a preheader guard to skip threads whose start index is past the bound.
+    {
+      Value *LoopBound = nullptr;
+      if (ExitingBB) {
+        BranchInst *ExitBranch = dyn_cast<BranchInst>(ExitingBB->getTerminator());
+        if (ExitBranch && ExitBranch->isConditional()) {
+          ICmpInst *ExitCond = dyn_cast<ICmpInst>(ExitBranch->getCondition());
+          if (ExitCond) {
+            if (ExitCond->getOperand(0) == Next)
+              LoopBound = ExitCond->getOperand(1);
+            else if (ExitCond->getOperand(1) == Next)
+              LoopBound = ExitCond->getOperand(0);
+          }
+        }
+      }
+
+      if (LoopBound) {
+        IRBuilder<> GuardBuilder(Preheader->getTerminator());
+        Value *BoundCast = LoopBound;
+        if (LoopBound->getType() != ThreadIterator->getType())
+          BoundCast = GuardBuilder.CreateIntCast(LoopBound, ThreadIterator->getType(), true, "bound_cast");
+
+        Value *GuardCond = GuardBuilder.CreateICmpSGE(ThreadIterator, BoundCast, "thread_guard");
+
+        SmallVector<BasicBlock *, 4> ExitBlocksForGuard;
+        L->getExitBlocks(ExitBlocksForGuard);
+
+        if (!ExitBlocksForGuard.empty()) {
+          BasicBlock *ExitBB = ExitBlocksForGuard[0];
+          Instruction *OldTerm = Preheader->getTerminator();
+          BranchInst::Create(ExitBB, Header, GuardCond, OldTerm);
+          OldTerm->eraseFromParent();
+        }
+      }
+    }
+
+    // Serialize Tapir instructions (detach/reattach/sync) in the loop body.
+    SmallVector<Instruction *, 4> TapirInstsToRemove;
+    for (BasicBlock *BB : L->blocks()) {
+      for (Instruction &I : *BB) {
+        if (isa<DetachInst>(&I) || isa<ReattachInst>(&I) || isa<SyncInst>(&I))
+          TapirInstsToRemove.push_back(&I);
+      }
+    }
+
+    for (Instruction *I : TapirInstsToRemove) {
+      if (auto *DI = dyn_cast<DetachInst>(I)) {
+        BranchInst::Create(DI->getDetached(), DI);
+        DI->eraseFromParent();
+      } else if (auto *RI = dyn_cast<ReattachInst>(I)) {
+        BranchInst::Create(RI->getSuccessor(0), RI);
+        RI->eraseFromParent();
+      } else if (auto *SI = dyn_cast<SyncInst>(I)) {
+        BranchInst::Create(SI->getSuccessor(0), SI);
+        SI->eraseFromParent();
+      }
+    }
+
+    // Insert __syncthreads() at each loop exit to synchronize threads.
+    SmallVector<BasicBlock *, 4> ExitBlocks;
+    L->getExitBlocks(ExitBlocks);
+    for (BasicBlock *ExitBB : ExitBlocks) {
+      IRBuilder<> SyncBuilder(&*ExitBB->getFirstInsertionPt());
+      SyncBuilder.CreateCall(CUSyncThreads);
+      LLVM_DEBUG(dbgs() << "  inserted __syncthreads() in: " << ExitBB->getName() << "\n");
+    }
+
+    // Store the inner loop's constant trip count as kernel metadata for launch config.
+    if (ExitingBB) {
+      BranchInst *ExitBr = dyn_cast<BranchInst>(ExitingBB->getTerminator());
+      if (ExitBr && ExitBr->isConditional()) {
+        if (ICmpInst *ExitCmp = dyn_cast<ICmpInst>(ExitBr->getCondition())) {
+          Value *Bound = nullptr;
+          if (ExitCmp->getOperand(0) == Next)
+            Bound = ExitCmp->getOperand(1);
+          else if (ExitCmp->getOperand(1) == Next)
+            Bound = ExitCmp->getOperand(0);
+          if (Bound) {
+            if (ConstantInt *CI = dyn_cast<ConstantInt>(Bound)) {
+              uint64_t InnerBound = CI->getZExtValue();
+              LLVMContext &Ctx = KernelF->getContext();
+              MDNode *BoundMD = MDNode::get(Ctx, ConstantAsMetadata::get(
+                  ConstantInt::get(Type::getInt64Ty(Ctx), InnerBound)));
+              KernelF->setMetadata("cuda.kernel.inner_bound", BoundMD);
+            }
+          }
+        }
+      }
+    }
+
+    LLVM_DEBUG(dbgs() << "  thread-parallel loop transformed\n");
+  }
+
+  // Strip llvm.loop.unroll.disable metadata from all loops so ptxas can
+  // optimize tight inner loops.
+  for (BasicBlock &BB : *KernelF) {
+    Instruction *Term = BB.getTerminator();
+    if (MDNode *LoopMD = Term->getMetadata(LLVMContext::MD_loop)) {
+      for (unsigned i = 1, e = LoopMD->getNumOperands(); i < e; ++i) {
+        if (MDNode *Op = dyn_cast<MDNode>(LoopMD->getOperand(i))) {
+          if (Op->getNumOperands() > 0) {
+            if (MDString *S = dyn_cast<MDString>(Op->getOperand(0))) {
+              if (S->getString() == "llvm.loop.unroll.disable") {
+                Term->setMetadata(LLVMContext::MD_loop, nullptr);
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  LLVM_DEBUG({
+    dbgs() << "\n=== Kernel IR after thread transformation ===\n";
+    KernelF->print(dbgs());
+    dbgs() << "\n=== End kernel IR ===\n\n";
+  });
 }
 
 void CudaLoop::fixDebugInfoInKernel(Function *KernelF) {
@@ -1541,7 +1989,8 @@ void CudaLoop::fixScannersInKernel(Function *KernelF, Value *TripCount,
   for (inst_iterator I = inst_begin(KernelF), E = inst_end(KernelF); I != E;
        ++I) {
     if (auto *Call = dyn_cast<CallInst>(&*I)) {
-      if (Call->getCalledFunction()->getName() != "__kitcuda_get_scan_view")
+      if (!Call->getCalledFunction() ||
+          Call->getCalledFunction()->getName() != "__kitcuda_get_scan_view")
         continue;
       size_t Size = 0;
       if (auto *ConstSize = dyn_cast<ConstantInt>(Call->getArgOperand(0))) {
@@ -1720,6 +2169,7 @@ void CudaLoop::transformForPTX(Function &F) {
     G.setName(name);
   }
 
+
   // We now need to walk the kernel (outlined loop) and look for
   // unresolved function calls.  In particular we need to check
   // to see if they can be resolved via CUDA's libdevice.
@@ -1739,7 +2189,7 @@ void CudaLoop::transformForPTX(Function &F) {
       }
 
       Function *CF = CI->getCalledFunction();
-      if (CF->size() == 0) {
+      if (CF && CF->size() == 0) {
         Function *DF = resolveLibDeviceFunction(CF, enableFast);
         if (DF != nullptr) {
           CallInst *NCI = dyn_cast<CallInst>(CI->clone());
@@ -2055,6 +2505,18 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
   } else
     CastTripCount = TripCount;
 
+  // Determine if this kernel has nested tapir loops
+  // by checking for the nested parallelism metadata we set earlier
+  // (we can't check for detach instructions here because they've been serialized)
+  bool HasNestedThreadLoops = false;
+  if (Function *KernelFunc = KernelModule.getFunction(KernelName)) {
+    if (KernelFunc->getMetadata("cuda.kernel.nested")) {
+      HasNestedThreadLoops = true;
+      LLVM_DEBUG(dbgs() << "\t*- detected nested thread-parallel loops "
+                        << "in kernel launch (from metadata)\n");
+    }
+  }
+
   // At this point we need a threads-per-block value for the launch
   // call.  The runtime will determine this value if ThreadsPerBlock
   // is zero but it can also be overridden via kitsune's forall launch
@@ -2069,6 +2531,16 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
   // stage of finalizing the launch calls for details.
   TapirLoopHints Hints(TL.getLoop());
   unsigned ThreadsPerBlock = 0;
+  
+  // For nested block/thread parallel loops:
+  // - TripCount = outer loop iterations = number of blocks to launch
+  // - TPB is determined at runtime via CUDA occupancy analysis
+  // For single-level loops:
+  // - TripCount = total iterations, TPB = 0 (runtime decides)
+  if (HasNestedThreadLoops) {
+    LLVM_DEBUG(dbgs() << "\t*- nested launch: TPB from occupancy, num_blocks = trip_count\n");
+  }
+  
   Constant *TPBlockValue =
       ConstantInt::get(Type::getInt32Ty(Ctx), ThreadsPerBlock);
 
@@ -2090,10 +2562,23 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
   NewBuilder.CreateStore(InstructionMix, AI);
 
   LLVM_DEBUG(dbgs() << "\t*- code gen kernel launch....\n");
+  
   Value *KSPtr = NewBuilder.CreateLoad(VoidPtrTy, CudaStream);
-  CallInst *LaunchStream = NewBuilder.CreateCall(
-      KitCudaLaunchFn, {DummyFBPtr, KNameParam, argsPtr, CastTripCount,
-                        TPBlockValue, AI, KSPtr});
+  CallInst *LaunchStream;
+  
+  if (HasNestedThreadLoops) {
+    LLVM_DEBUG(dbgs() << "\t\t nested launch: num_blocks = " << *CastTripCount << "\n");
+    LaunchStream = NewBuilder.CreateCall(
+        KitCudaLaunchNestedFn, {DummyFBPtr, KNameParam, argsPtr, CastTripCount,
+                                AI, KSPtr});
+  } else {
+    LLVM_DEBUG(dbgs() << "\t\t trip count: " << *CastTripCount << "\n");
+    LLVM_DEBUG(dbgs() << "\t\t threads per block: " << ThreadsPerBlock 
+                      << " (0=runtime decides)\n");
+    LaunchStream = NewBuilder.CreateCall(
+        KitCudaLaunchFn, {DummyFBPtr, KNameParam, argsPtr, CastTripCount,
+                          TPBlockValue, AI, KSPtr});
+  }
   // if (not StreamAssigned)
   NewBuilder.CreateStore(LaunchStream, CudaStream);
   LLVM_DEBUG(dbgs() << "\t\t+- registering launch stream:\n"
@@ -2553,7 +3038,10 @@ void CudaABI::finalizeLaunchCalls(Module &M, GlobalVariable *Fatbin) {
                                                          "_cubin.fatbin", CI);
               CI->setArgOperand(0, CFatbin);
 
-              if (ThreadsPerBlockCI) {
+              // Only replace TPB arg for regular (non-nested) launches.
+              // Nested launches don't have a TPB parameter.
+              bool IsNestedLaunch = CFn->getName() == "__kitcuda_launch_kernel_nested";
+              if (ThreadsPerBlockCI && !IsNestedLaunch) {
                 LLVM_DEBUG(dbgs()
                            << "\t\t\t\t replacing thread-per-block arg.\n");
                 Value *TBPParam = ThreadsPerBlockCI->getArgOperand(0);
@@ -3153,6 +3641,81 @@ CudaABIOutputFile CudaABI::generatePTX() {
   // Fixup thread fence instructions.
   fixFencesAndAtomics(KernelModule);
 
+  // Mark loads from readonly pointer arguments with !invariant.load metadata.
+  // The NVPTX backend converts these to ld.global.nc (read-only cache) which
+  // bypasses L1 and uses the dedicated texture cache, improving throughput for
+  // read-only data like twiddle tables.
+  {
+    MDNode *InvariantMD = MDNode::get(KernelModule.getContext(), {});
+    for (Function &F : KernelModule) {
+      if (F.isDeclaration())
+        continue;
+      // Check nvvm.annotations to confirm this is a kernel
+      bool IsKernel = false;
+      if (auto *NMD = KernelModule.getNamedMetadata("nvvm.annotations")) {
+        for (auto *Op : NMD->operands()) {
+          if (Op->getNumOperands() >= 3)
+            if (auto *VMD = dyn_cast<ValueAsMetadata>(Op->getOperand(0).get()))
+              if (VMD->getValue() == &F)
+                IsKernel = true;
+        }
+      }
+      if (!IsKernel)
+        continue;
+      for (unsigned I = 0, E = F.arg_size(); I < E; ++I) {
+        Argument *Arg = F.getArg(I);
+        if (!Arg->getType()->isPointerTy())
+          continue;
+        // Check if this pointer arg is only used for loads (never stored to).
+        // If so, mark it readonly+noalias here (right before codegen) so the
+        // NVPTX backend will emit ld.global.nc for it.
+        bool OnlyLoads = true;
+        bool HasLoad = false;
+        SmallVector<Value *, 16> PtrWorklist;
+        SmallPtrSet<Value *, 16> PtrVisited;
+        PtrWorklist.push_back(Arg);
+        while (!PtrWorklist.empty() && OnlyLoads) {
+          Value *V = PtrWorklist.pop_back_val();
+          if (!PtrVisited.insert(V).second) continue;
+          for (User *UU : V->users()) {
+            if (isa<LoadInst>(UU)) {
+              HasLoad = true;
+            } else if (auto *SI = dyn_cast<StoreInst>(UU)) {
+              if (SI->getPointerOperand() == V) { OnlyLoads = false; break; }
+            } else if (isa<GetElementPtrInst>(UU) || isa<BitCastInst>(UU) ||
+                       isa<AddrSpaceCastInst>(UU)) {
+              PtrWorklist.push_back(UU);
+            } else {
+              OnlyLoads = false; break;
+            }
+          }
+        }
+        if (!OnlyLoads || !HasLoad)
+          continue;
+        F.addParamAttr(I, Attribute::ReadOnly);
+        F.addParamAttr(I, Attribute::NoAlias);
+        // Walk through GEPs and annotate loads as invariant
+        SmallVector<Value *, 16> Worklist;
+        SmallPtrSet<Value *, 16> Visited;
+        Worklist.push_back(Arg);
+        while (!Worklist.empty()) {
+          Value *V = Worklist.pop_back_val();
+          if (!Visited.insert(V).second)
+            continue;
+          for (User *U : V->users()) {
+            if (auto *LI = dyn_cast<LoadInst>(U)) {
+              LI->setMetadata(LLVMContext::MD_invariant_load, InvariantMD);
+            } else if (isa<GetElementPtrInst>(U) ||
+                       isa<BitCastInst>(U) ||
+                       isa<AddrSpaceCastInst>(U)) {
+              Worklist.push_back(U);
+            }
+          }
+        }
+      }
+    }
+  }
+
   // PTXAS does not support optimized debug info. Practically, this means
   // DICompileUnit::FullDebug and DICompileUnit::LineTablesOnly do not work. But
   // DICompileUnit::DebugDirectivesOnly does and it's good enough (you get to
@@ -3287,8 +3850,39 @@ CudaABI::getLoopOutlineProcessor(const TapirLoopInfo *TL) {
   // module (KernelModule) as the destination for all generated (device-side)
   // code.
 
-  std::string ModuleName = sys::path::filename(M.getName()).str();
   Loop *TheLoop = TL->getLoop();
+  Function *ParentFn = TheLoop->getHeader()->getParent();
+
+  // Skip loops already inside a kernel (they use thread-level parallelism).
+  if (ParentFn->getName().starts_with(CUABI_KERNEL_NAME_PREFIX)) {
+    LLVM_DEBUG(dbgs() << "cuabi: skipping outline of nested loop at "
+                      << TheLoop->getStartLoc() << "\n"
+                      << "        (already inside kernel, will use threads)\n");
+    return nullptr;
+  }
+
+  // Skip loops nested inside another Tapir loop (detected by detach in parent header).
+  Loop *ParentLoop = TheLoop->getParentLoop();
+  while (ParentLoop) {
+    BasicBlock *ParentHeader = ParentLoop->getHeader();
+    for (Instruction &I : *ParentHeader) {
+      if (isa<DetachInst>(&I)) {
+        LLVM_DEBUG(dbgs() << "cuabi: skipping outline of nested tapir loop\n");
+        return nullptr;
+      }
+    }
+    ParentLoop = ParentLoop->getParentLoop();
+  }
+
+  // Skip thread-parallel inner loops (they stay inside the parent kernel).
+  if (isThreadParallelLoop(TheLoop)) {
+    LLVM_DEBUG(dbgs() << "cuabi: skipping outline of threadparallel loop at "
+                      << TheLoop->getStartLoc() << "\n"
+                      << "        (will remain inside parent kernel)\n");
+    return nullptr;
+  }
+
+  std::string ModuleName = sys::path::filename(M.getName()).str();
   Function *Fn = TheLoop->getHeader()->getParent();
   std::string KernelName = Fn->getName().str();
 

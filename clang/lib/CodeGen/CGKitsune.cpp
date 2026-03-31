@@ -304,6 +304,29 @@ void CodeGenFunction::EmitForallStmt(const ForallStmt &S,
   std::optional<llvm::TapirTargetID> TT = GetTapirTargetAttr(ForallAttr);
   LoopStack.setLoopTarget(TT);
 
+  // Detect nested GPU parallelism: when inside another CUDA loop, mark this
+  // as thread-parallel; otherwise mark it as block-parallel.
+  LoopAttributes::LSStrategy Strategy = GetTapirStrategyAttr(ForallAttr);
+  bool IsGPULoop = (TT == llvm::TapirTargetID::Cuda &&
+                    (Strategy == LoopAttributes::GPU || Strategy == LoopAttributes::SEQ));
+
+  if (IsGPULoop) {
+    bool IsNested = false;
+    if (LoopStack.hasLoopInfo()) {
+      const LoopInfo &ParentLoop = LoopStack.getCurrentLoop();
+      bool ParentIsGPU = (ParentLoop.getAttributes().LoopTarget == llvm::TapirTargetID::Cuda &&
+                          (ParentLoop.getAttributes().SpawnStrategy == LoopAttributes::GPU ||
+                           ParentLoop.getAttributes().SpawnStrategy == LoopAttributes::SEQ));
+      if (ParentIsGPU)
+        IsNested = true;
+    }
+
+    if (IsNested)
+      LoopStack.setGPUParallelism(LoopAttributes::ThreadParallel);
+    else
+      LoopStack.setGPUParallelism(LoopAttributes::BlockParallel);
+  }
+
   if (TT == llvm::TapirTargetID::Cuda) {
     llvm::Value *ThreadsPerBlock = GetKitsuneLaunchAttr(ForallAttr);
     if (ThreadsPerBlock) {
@@ -483,6 +506,29 @@ void CodeGenFunction::EmitCXXForallRangeStmt(
 
   std::optional<llvm::TapirTargetID> TT = GetTapirTargetAttr(ForallAttr);
   LoopStack.setLoopTarget(TT);
+
+  // Detect nested GPU parallelism: when inside another CUDA loop, mark this
+  // as thread-parallel; otherwise mark it as block-parallel.
+  LoopAttributes::LSStrategy Strategy = GetTapirStrategyAttr(ForallAttr);
+  bool IsGPULoop = (TT == llvm::TapirTargetID::Cuda &&
+                    (Strategy == LoopAttributes::GPU || Strategy == LoopAttributes::SEQ));
+
+  if (IsGPULoop) {
+    bool IsNested = false;
+    if (LoopStack.hasLoopInfo()) {
+      const LoopInfo &ParentLoop = LoopStack.getCurrentLoop();
+      bool ParentIsGPU = (ParentLoop.getAttributes().LoopTarget == llvm::TapirTargetID::Cuda &&
+                          (ParentLoop.getAttributes().SpawnStrategy == LoopAttributes::GPU ||
+                           ParentLoop.getAttributes().SpawnStrategy == LoopAttributes::SEQ));
+      if (ParentIsGPU)
+        IsNested = true;
+    }
+
+    if (IsNested)
+      LoopStack.setGPUParallelism(LoopAttributes::ThreadParallel);
+    else
+      LoopStack.setGPUParallelism(LoopAttributes::BlockParallel);
+  }
 
   if (TT == llvm::TapirTargetID::Cuda) {
     llvm::Value *ThreadsPerBlock = GetKitsuneLaunchAttr(ForallAttr);

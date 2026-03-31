@@ -420,6 +420,85 @@ void *__kitcuda_launch_kernel(const void *fat_bin, const char *kernel_name,
   return (void *)cu_stream;
 }
 
+void *__kitcuda_launch_kernel_nested(const void *fat_bin,
+                                     const char *kernel_name,
+                                     void **kern_args, uint64_t num_blocks,
+                                     const KitRTInstMix *inst_mix,
+                                     void *opaque_stream) {
+  assert(fat_bin && "kitcuda: nested launch with null fat binary!");
+  assert(kernel_name && "kitcuda: nested launch with null name!");
+  assert(kern_args && "kitcuda: nested launch with null args!");
+  assert(num_blocks != 0 && "kitcuda: nested launch with zero blocks!");
+
+  KIT_NVTX_PUSH("kitcuda:launch_kernel_nested", KIT_NVTX_LAUNCH);
+
+  __kitcuda_set_context();
+
+  CUfunction cu_func;
+  KitCudaKernelMap::iterator kernit = _kitcuda_kernel_map.find(kernel_name);
+  if (kernit == _kitcuda_kernel_map.end()) {
+    _kitcuda_module_map_mutex.lock();
+    KitCudaKernelMap::iterator kernit = _kitcuda_kernel_map.find(kernel_name);
+    if (kernit == _kitcuda_kernel_map.end()) {
+      CUmodule cu_module;
+      KitCudaModuleMap::iterator modit = _kitcuda_module_map.find(fat_bin);
+      if (modit == _kitcuda_module_map.end()) {
+        CU_SAFE_CALL(cuModuleLoadData_p(&cu_module, fat_bin));
+        _kitcuda_module_map[fat_bin] = cu_module;
+      } else
+        cu_module = modit->second;
+      CU_SAFE_CALL(cuModuleGetFunction_p(&cu_func, cu_module, kernel_name));
+      _kitcuda_kernel_map[kernel_name] = cu_func;
+    } else {
+      cu_func = kernit->second;
+    }
+    _kitcuda_module_map_mutex.unlock();
+  } else
+    cu_func = kernit->second;
+
+  // For nested kernels, blocks_per_grid = num_blocks (the outer loop count).
+  // Use occupancy analysis to determine optimal threads_per_block,
+  // then round down to the nearest power of 2 for optimal strided loop access.
+  int blks_per_grid = (int)num_blocks;
+  int threads_per_blk = 0;
+
+  // Use CUDA's occupancy API to determine optimal threads per block
+  int min_grid_size;
+  CU_SAFE_CALL(cuOccupancyMaxPotentialBlockSize_p(
+      &min_grid_size, &threads_per_blk, cu_func, 0, 0, 0));
+
+  // Round down to nearest power of 2 for optimal strided loop access.
+  // Non-power-of-2 TPB causes warp divergence in the last batch of
+  // iterations, reducing performance.
+  {
+    int po2 = 1;
+    while (po2 * 2 <= threads_per_blk) po2 <<= 1;
+    threads_per_blk = po2;
+  }
+
+  if (__kitrt_verbose_mode()) {
+    fprintf(stderr,
+            "kitcuda: nested kernel '%s' launch parameters:\n", kernel_name);
+    fprintf(stderr, "  blocks (outer loop): %d, 1, 1\n", blks_per_grid);
+    fprintf(stderr, "  threads (occupancy): %d, 1, 1\n", threads_per_blk);
+    fprintf(stderr, "  num_blocks: %ld\n\n", num_blocks);
+  }
+
+  CUstream cu_stream = nullptr;
+  if (opaque_stream == nullptr) {
+    cu_stream = (CUstream)__kitcuda_get_thread_stream();
+  } else {
+    cu_stream = (CUstream)opaque_stream;
+  }
+
+  CU_SAFE_CALL(cuLaunchKernel_p(cu_func, blks_per_grid, 1, 1,
+                                threads_per_blk, 1, 1,
+                                0, // shared mem size
+                                cu_stream, kern_args, NULL));
+  KIT_NVTX_POP();
+  return (void *)cu_stream;
+}
+
 void __kitcuda_alloc_scanner(const void *fat_bin, const char *kernel_name,
                              uint64_t trip_count, const KitRTInstMix *inst_mix,
                              uint64_t size, void **aggregate,

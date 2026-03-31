@@ -66,10 +66,10 @@ logger.addHandler(handler)
 
 class Invocation:
     cilk_path = os.environ.get(
-        "OPENCILK_PATH", "/home/chengyuan/Projects/opencilk/build"
+        "OPENCILK_PATH", "/home/mrowkam/git-repos/opencilk-project/build"
     )
     kitsune_path = os.environ.get(
-        "KITSUNE_PATH", "/home/chengyuan/Projects/kitsune/build"
+        "KITSUNE_PATH", "/home/mrowkam/git-repos/kitsune/build"
     )
 
     clang_args: list[str] = []

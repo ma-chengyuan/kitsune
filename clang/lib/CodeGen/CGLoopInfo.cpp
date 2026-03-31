@@ -506,6 +506,7 @@ LoopAttributes::LoopAttributes(bool IsParallel)
       VectorizeScalable(LoopAttributes::Unspecified), InterleaveCount(0),
       UnrollCount(0), UnrollAndJamCount(0),
       TapirGrainSize(0),
+      GPUParallelism(LoopAttributes::NoGPUParallel), GPUThreadsPerBlock(0),
       DistributeEnable(LoopAttributes::Unspecified), PipelineDisabled(false),
       PipelineInitiationInterval(0), CodeAlign(0), MustProgress(false),
       SpawnStrategy(LoopAttributes::SEQ) {}
@@ -518,6 +519,8 @@ void LoopAttributes::clear() {
   UnrollCount = 0;
   UnrollAndJamCount = 0;
   TapirGrainSize = 0;
+  GPUParallelism = LoopAttributes::NoGPUParallel;
+  GPUThreadsPerBlock = 0;
   VectorizeEnable = LoopAttributes::Unspecified;
   UnrollEnable = LoopAttributes::Unspecified;
   UnrollAndJamEnable = LoopAttributes::Unspecified;
@@ -581,6 +584,24 @@ void LoopInfo::getTapirLoopProperties(
         MDString::get(Ctx, "tapir.loop.grainsize"),
         ConstantAsMetadata::get(ConstantInt::get(llvm::Type::getInt32Ty(Ctx),
                                                  Attrs.TapirGrainSize))};
+    LoopProperties.push_back(MDNode::get(Ctx, Vals));
+  }
+
+  // Setting GPU parallelism level
+  if (Attrs.GPUParallelism == LoopAttributes::BlockParallel) {
+    Metadata *Vals[] = {MDString::get(Ctx, "tapir.loop.gpu.blockparallel")};
+    LoopProperties.push_back(MDNode::get(Ctx, Vals));
+  } else if (Attrs.GPUParallelism == LoopAttributes::ThreadParallel) {
+    Metadata *Vals[] = {MDString::get(Ctx, "tapir.loop.gpu.threadparallel")};
+    LoopProperties.push_back(MDNode::get(Ctx, Vals));
+  }
+
+  // Setting GPU threads per block
+  if (Attrs.GPUThreadsPerBlock > 0) {
+    Metadata *Vals[] = {
+        MDString::get(Ctx, "tapir.loop.gpu.threads_per_block"),
+        ConstantAsMetadata::get(ConstantInt::get(llvm::Type::getInt32Ty(Ctx),
+                                                 Attrs.GPUThreadsPerBlock))};
     LoopProperties.push_back(MDNode::get(Ctx, Vals));
   }
 

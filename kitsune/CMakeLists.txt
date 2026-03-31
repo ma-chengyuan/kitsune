@@ -32,8 +32,7 @@ option(KITSUNE_KOKKOS_ENABLE
   "Enable custom recognition and compilation of Kokkos"
   ON)
 
-set(KITSUNE_KOKKOS_ENABLED ${KITSUNE_KOKKOS_ENABLE} "Enable Kokkos recognition" FORCE)
-
+set(KITSUNE_KOKKOS_ENABLED ${KITSUNE_KOKKOS_ENABLE})
 # TODO: The _MAX variables are not currently used but it would be good to
 # require a range instead of just a minimum. In practice, we may want to
 # restrict it to just a single version because maintaining even a small range

@@ -74,6 +74,15 @@ struct LoopAttributes {
   /// tapir.loop.grainsize.
   unsigned TapirGrainSize;
 
+  /// GPU parallelism level.
+  enum GPUParallelismLevel { NoGPUParallel, BlockParallel, ThreadParallel };
+  
+  /// Value for tapir.loop.gpu.blockparallel / threadparallel metadata.
+  GPUParallelismLevel GPUParallelism;
+  
+  /// Value for threads per block for nested GPU parallelism.
+  unsigned GPUThreadsPerBlock;
+
   /// Value for llvm.loop.distribute.enable metadata.
   LVEnableState DistributeEnable;
 
@@ -327,6 +336,22 @@ public:
   void setLoopTarget(std::optional<llvm::TapirTargetID> LT) {
     StagedAttrs.LoopTarget = LT;
   }
+
+  /// Set the GPU parallelism level for the next loop pushed.
+  void setGPUParallelism(const LoopAttributes::GPUParallelismLevel &Level) {
+    StagedAttrs.GPUParallelism = Level;
+  }
+
+  /// Set the GPU threads per block for the next loop pushed.
+  void setGPUThreadsPerBlock(unsigned C) {
+    StagedAttrs.GPUThreadsPerBlock = C;
+  }
+
+  /// Check if we're currently inside a loop.
+  bool hasLoopInfo() const { return !Active.empty(); }
+  
+  /// Get the current loop info (must call hasLoopInfo() first).
+  const LoopInfo &getCurrentLoop() const { return *Active.back(); }
 
 private:
   /// Returns true if there is LoopInfo on the stack.

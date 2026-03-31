@@ -1204,6 +1204,33 @@ void CodeGenFunction::EmitDoStmt(const DoStmt &S,
 
 void CodeGenFunction::EmitForStmt(const ForStmt &S,
                                   ArrayRef<const Attr *> ForAttrs) {
+  // Detect nested GPU parallelism: set loop target and GPU parallelism level
+  // before pushing to the LoopStack so the parent loop info is still accessible.
+  std::optional<llvm::TapirTargetID> TT = GetTapirTargetAttr(ForAttrs);
+  if (TT.has_value())
+    LoopStack.setLoopTarget(TT);
+
+  LoopAttributes::LSStrategy Strategy = GetTapirStrategyAttr(ForAttrs);
+  bool IsGPULoop = (TT == llvm::TapirTargetID::Cuda &&
+                    (Strategy == LoopAttributes::GPU || Strategy == LoopAttributes::SEQ));
+
+  if (IsGPULoop) {
+    bool IsNested = false;
+    if (LoopStack.hasLoopInfo()) {
+      const LoopInfo &ParentLoop = LoopStack.getCurrentLoop();
+      bool ParentIsGPU = (ParentLoop.getAttributes().LoopTarget == llvm::TapirTargetID::Cuda &&
+                          (ParentLoop.getAttributes().SpawnStrategy == LoopAttributes::GPU ||
+                           ParentLoop.getAttributes().SpawnStrategy == LoopAttributes::SEQ));
+      if (ParentIsGPU)
+        IsNested = true;
+    }
+
+    if (IsNested)
+      LoopStack.setGPUParallelism(LoopAttributes::ThreadParallel);
+    else
+      LoopStack.setGPUParallelism(LoopAttributes::BlockParallel);
+  }
+
   JumpDest LoopExit = getJumpDestInCurrentScope("for.end");
 
   LexicalScope ForScope(*this, S.getSourceRange());

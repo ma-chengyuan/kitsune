@@ -239,6 +239,7 @@ private:
   StructType *KernelInstMixTy;
 
   FunctionCallee KitCudaLaunchFn = nullptr;
+  FunctionCallee KitCudaLaunchNestedFn = nullptr;
   FunctionCallee KitCudaSyncFn = nullptr;
 
   // Runtime prefetch support entry points.
@@ -312,6 +313,9 @@ public:
 
   void fixScannersInKernel(Function *KernelF, Value *TripCount,
                            ValueToValueMapTy &VMap);
+
+  void transformThreadParallelLoops(Function *KernelF, Value *BlockIV,
+                                    ValueToValueMapTy &VMap);
 
   void fixDebugInfoInKernel(Function *KernelF);
 

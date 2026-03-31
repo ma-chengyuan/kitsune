@@ -2319,6 +2319,8 @@ void llvm::TapirLoopHints::getHintsFromMetadata() {
     StringRef Name = S->getString();
     if (Args.size() == 1)
       setHint(Name, Args[0]);
+    else if (Args.size() == 0)
+      setHint(Name, nullptr);  // Handle flag-style hints without arguments
   }
 }
 
@@ -2328,19 +2330,25 @@ void llvm::TapirLoopHints::setHint(StringRef Name, Metadata *Arg) {
     return;
   Name = Name.substr(Prefix().size(), StringRef::npos);
 
-  const ConstantInt *C = mdconst::dyn_extract<ConstantInt>(Arg);
-  if (!C)
-    return;
-  unsigned Val = C->getZExtValue();
+  // Handle flag-style hints (no argument)
+  unsigned Val = 1;  // Default for flags
+  if (Arg) {
+    const ConstantInt *C = mdconst::dyn_extract<ConstantInt>(Arg);
+    if (!C)
+      return;
+    Val = C->getZExtValue();
+  }
 
   Hint *Hints[] = {&Strategy,        &Grainsize, &LoopTarget,
-                   &ThreadsPerBlock, &AutoTune,  &DeferredSync};
+                   &ThreadsPerBlock, &AutoTune,  &DeferredSync,
+                   &GPUBlockParallel, &GPUThreadParallel};
   for (auto H : Hints) {
     if (Name == H->Name) {
-      if (H->validate(Val))
+      if (H->validate(Val)) {
         H->Value = Val;
-      else
+      } else {
         LLVM_DEBUG(dbgs() << "Tapir: ignoring invalid hint '" << Name << "'\n");
+      }
       break;
     }
   }

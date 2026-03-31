@@ -298,6 +298,26 @@ extern void* __kitcuda_launch_kernel(const void *fat_bin, const char *kern_name,
                                      void *opaque_stream);
 
 /**
+ * Launch a nested (block/thread parallel) kernel.
+ * Unlike the standard launch, this function takes the number of blocks
+ * directly (rather than a trip count), and uses CUDA occupancy analysis
+ * to determine the optimal threads per block.
+ *
+ * @param fat_bin - Pointer to the fat binary.
+ * @param kern_name - Name of the kernel.
+ * @param kern_args - Kernel arguments.
+ * @param num_blocks - Number of blocks to launch (= outer loop iterations).
+ * @param inst_mix - Instruction mix data.
+ * @param opaque_stream - CUDA stream.
+ */
+extern void* __kitcuda_launch_kernel_nested(const void *fat_bin,
+                                            const char *kern_name,
+                                            void **kern_args,
+                                            uint64_t num_blocks,
+                                            const KitRTInstMix *inst_mix,
+                                            void *opaque_stream);
+
+/**
  * Enable/Disable the use of occupancy calculations for the
  * determination of kernel launch parameters.  If the `enable`
  * parameter is set to `true` occupancy-based launches will be

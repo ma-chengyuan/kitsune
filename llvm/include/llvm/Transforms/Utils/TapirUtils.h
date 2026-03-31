@@ -261,7 +261,9 @@ private:
     HK_LOOPTARGET,
     HK_THREADS_PER_BLOCK,
     HK_AUTO_TUNE,
-    HK_DEFERRED_SYNC
+    HK_DEFERRED_SYNC,
+    HK_GPU_BLOCK_PARALLEL,
+    HK_GPU_THREAD_PARALLEL
   };
 
   /// Hint - associates name and validation with the hint value.
@@ -290,6 +292,10 @@ private:
         return Val;
       case HK_AUTO_TUNE:
         return Val;
+      case HK_GPU_BLOCK_PARALLEL:
+        return Val == 0 || Val == 1;
+      case HK_GPU_THREAD_PARALLEL:
+        return Val == 0 || Val == 1;
       }
       return false;
     }
@@ -305,6 +311,8 @@ private:
   Hint DeferredSync;
   Hint ThreadsPerBlock;
   Hint AutoTune;
+  Hint GPUBlockParallel;
+  Hint GPUThreadParallel;
 
   /// Return the loop metadata prefix.
   static StringRef Prefix() { return "tapir.loop."; }
@@ -336,7 +344,10 @@ public:
         DeferredSync("deferred_sync", 0, HK_DEFERRED_SYNC),
         ThreadsPerBlock("kitsune.launch.threads.per.block", 0,
                         HK_THREADS_PER_BLOCK),
-        AutoTune("kitsune.launch.auto.tune", 0, HK_AUTO_TUNE), TheLoop(L) {
+        AutoTune("kitsune.launch.auto.tune", 0, HK_AUTO_TUNE),
+        GPUBlockParallel("gpu.blockparallel", 0, HK_GPU_BLOCK_PARALLEL),
+        GPUThreadParallel("gpu.threadparallel", 0, HK_GPU_THREAD_PARALLEL),
+        TheLoop(L) {
     // Populate values with existing loop metadata.
     getHintsFromMetadata();
   }
@@ -372,6 +383,10 @@ public:
   }
 
   bool getDeferredSync() const { return DeferredSync.Value; }
+
+  bool isGPUBlockParallel() const { return GPUBlockParallel.Value != 0; }
+
+  bool isGPUThreadParallel() const { return GPUThreadParallel.Value != 0; }
 
   /// Clear Tapir Hints metadata.
   void clearHintsMetadata();
