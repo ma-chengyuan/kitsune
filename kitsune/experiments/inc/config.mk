@@ -1,5 +1,5 @@
 # Kitsune support
-kitsune_install_prefix:=/home/mrowkam/.local/kitsune
+kitsune_install_prefix:=/home/mrowkam/.local/kitsune_mario
 
 # Cuda support
 kitsune_cuda_enable:="ON"

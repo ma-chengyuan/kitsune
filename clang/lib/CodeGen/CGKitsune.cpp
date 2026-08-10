@@ -62,17 +62,12 @@
 using namespace clang;
 using namespace CodeGen;
 
-// KITSUNE FIXME: This seems to be unused. Is this actually the case? Also, is
-// there is a bug in the attribute handling loop since curAttr is never
-// incremented? Or is there some mysterious C++ black magic at work again?
 LoopAttributes::LSStrategy
 CodeGenFunction::GetTapirStrategyAttr(ArrayRef<const Attr *> Attrs) {
   LoopAttributes::LSStrategy Strategy = LoopAttributes::SEQ;
-  auto curAttr = Attrs.begin();
-  while (curAttr != Attrs.end()) {
-    const attr::Kind AttrKind = (*curAttr)->getKind();
-    if (AttrKind == attr::TapirStrategy) {
-      const auto *SAttr = cast<const TapirStrategyAttr>(*curAttr);
+  for (const auto *curAttr : Attrs) {
+    if (curAttr->getKind() == attr::TapirStrategy) {
+      const auto *SAttr = cast<const TapirStrategyAttr>(curAttr);
       switch (SAttr->getTapirStrategyType()) {
       case TapirStrategyAttr::SEQ:
         Strategy = LoopAttributes::SEQ;
@@ -82,9 +77,6 @@ CodeGenFunction::GetTapirStrategyAttr(ArrayRef<const Attr *> Attrs) {
         break;
       case TapirStrategyAttr::GPU:
         Strategy = LoopAttributes::GPU;
-        break;
-      default:
-        llvm_unreachable("all strategies should be handled before this!");
         break;
       }
     }

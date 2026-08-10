@@ -66,7 +66,7 @@ logger.addHandler(handler)
 
 class Invocation:
     cilk_path = os.environ.get(
-        "OPENCILK_PATH", "/home/mrowkam/git-repos/opencilk-project/build"
+        "OPENCILK_PATH", "/home/mrowkam/git-repos/opencilk/build"
     )
     kitsune_path = os.environ.get(
         "KITSUNE_PATH", "/home/mrowkam/git-repos/kitsune/build"

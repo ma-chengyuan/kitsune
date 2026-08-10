@@ -476,6 +476,21 @@ void *__kitcuda_launch_kernel_nested(const void *fat_bin,
     threads_per_blk = po2;
   }
 
+  // Experimental override: the occupancy heuristic above ignores the inner
+  // (per-block) trip count of a nested forall, so it tends to launch far more
+  // threads than the block actually uses (e.g. 512 when the inner loop is 64).
+  // KITCUDA_NESTED_TPB lets us pin the block size to the real inner extent.
+  {
+    int forced_tpb = 0;
+    if (__kitrt_get_env_value("KITCUDA_NESTED_TPB", forced_tpb) &&
+        forced_tpb > 0) {
+      if (forced_tpb > 1024) forced_tpb = 1024;
+      int po2 = 1;
+      while (po2 * 2 <= forced_tpb) po2 <<= 1;
+      threads_per_blk = po2;
+    }
+  }
+
   if (__kitrt_verbose_mode()) {
     fprintf(stderr,
             "kitcuda: nested kernel '%s' launch parameters:\n", kernel_name);

@@ -110,10 +110,17 @@ void appendToGlobalCtors(Module &M, Constant *C, int Priority, Constant *Data) {
                            "llvm.global_ctors");
 }
 
-void getKernelInstructionMix(const Function *F, KernelInstMixData &InstMix) {
-  InstMix.num_memory_ops = 0;
-  InstMix.num_flops = 0;
-  InstMix.num_iops = 0;
+static void getKernelInstructionMixImpl(const Function *F,
+                                        KernelInstMixData &InstMix,
+                                        std::set<const Function *> &Visited) {
+  // Robustness guards (previously missing, caused stack-overflow crashes):
+  //  - null callee: CallInst::getCalledFunction() returns null for indirect
+  //    and inline-asm calls; recursing into it dereferences null.
+  //  - declaration: no body to walk (external/intrinsic).
+  //  - cycle/diamond: without a visited set, recursive or mutually-recursive
+  //    call graphs (or deeply-nested inlined libraries) recurse unbounded.
+  if (!F || F->isDeclaration() || !Visited.insert(F).second)
+    return;
 
   std::set<const Function *> CalledFuncs;
   for (auto I = inst_begin(F); I != inst_end(F); I++) {
@@ -135,18 +142,22 @@ void getKernelInstructionMix(const Function *F, KernelInstMixData &InstMix) {
         InstMix.num_iops++;
     } else {
       if (auto CI = dyn_cast<CallInst>(&*I)) {
-        CalledFuncs.insert(CI->getCalledFunction());
+        if (const Function *Callee = CI->getCalledFunction())
+          CalledFuncs.insert(Callee);
       }
     }
   }
 
-  for (auto F : CalledFuncs) {
-    KernelInstMixData localInstMix;
-    getKernelInstructionMix(F, localInstMix);
-    InstMix.num_memory_ops += localInstMix.num_memory_ops;
-    InstMix.num_flops += localInstMix.num_flops;
-    InstMix.num_iops += localInstMix.num_iops;
-  }
+  for (auto Callee : CalledFuncs)
+    getKernelInstructionMixImpl(Callee, InstMix, Visited);
+}
+
+void getKernelInstructionMix(const Function *F, KernelInstMixData &InstMix) {
+  InstMix.num_memory_ops = 0;
+  InstMix.num_flops = 0;
+  InstMix.num_iops = 0;
+  std::set<const Function *> Visited;
+  getKernelInstructionMixImpl(F, InstMix, Visited);
 }
 
 } // namespace tapir
