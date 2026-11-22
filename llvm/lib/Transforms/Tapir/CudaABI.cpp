@@ -248,6 +248,11 @@ cl::opt<bool> DontFuseReducers(
     cl::desc("Generate separate reduction trees for each reducer. "
              "(default=false)"));
 
+cl::opt<bool> UseNaiveAtomics(
+    "cuabi-naive-atomics", cl::init(false), cl::NotHidden,
+    cl::desc("Use naive per-thread atomic operations instead of hierarchical "
+             "warp/block reduction. (default=false)"));
+
 cl::opt<bool>
     EmbedPTXInFatbinaries("cuabi-embed-ptx", cl::init(false), cl::Hidden,
                           cl::desc("Embed intermediate PTX files in the "
@@ -1680,6 +1685,77 @@ void CudaLoop::fixReducersInKernel(Function *KernelF, Value *ThreadIdx,
   // Remove the existing terminator for now
   Exit->getTerminator()->eraseFromParent();
   Type *Int32Ty = Type::getInt32Ty(KernelF->getContext());
+
+  // Naive atomics: each thread does a CAS loop directly to global memory
+  // This is intentionally inefficient for ablation study comparison
+  if (UseNaiveAtomics) {
+    LLVM_DEBUG(dbgs() << "cuabi: using naive atomics for reduction\n");
+    for (auto [Ptr, Info] : ReducedVars) {
+      if (Info.Type->isIntegerTy()) {
+        // Simple CAS loop for each thread
+        Value *OldPtr = B.CreateAlloca(Info.Type);
+        Value *NewPtr = B.CreateAlloca(Info.Type);
+        BasicBlock *LoopBB = BasicBlock::Create(
+            KernelF->getContext(),
+            "naive_atomic_loop_" + Ptr->getName().str(), KernelF);
+        BasicBlock *DoneBB = BasicBlock::Create(
+            KernelF->getContext(),
+            "naive_atomic_done_" + Ptr->getName().str(), KernelF);
+        LoadInst *LoadedOldVal = B.CreateLoad(Info.Type, Ptr);
+        BasicBlock *PrevBlock = B.GetInsertBlock();
+        B.CreateBr(LoopBB);
+        B.SetInsertPoint(LoopBB);
+        {
+          PHINode *OldVal = B.CreatePHI(Info.Type, 2);
+          B.CreateStore(OldVal, OldPtr);
+          B.CreateStore(B.CreateLoad(Info.Type, Info.LocalPtr), NewPtr);
+          CallInst *MergeCall = B.CreateCall(Info.MergeFn, {NewPtr, OldPtr});
+          MergeCall->setDebugLoc(FirstAndLastLoc.second);
+          Value *CASResult = B.CreateAtomicCmpXchg(
+              Ptr, OldVal, B.CreateLoad(Info.Type, NewPtr),
+              MaybeAlign(Info.Size), AtomicOrdering::SequentiallyConsistent,
+              AtomicOrdering::SequentiallyConsistent);
+          Value *CASOldVal = B.CreateExtractValue(CASResult, 0);
+          Value *CASSuccess = B.CreateExtractValue(CASResult, 1);
+          OldVal->addIncoming(CASOldVal, LoopBB);
+          OldVal->addIncoming(LoadedOldVal, PrevBlock);
+          B.CreateCondBr(CASSuccess, DoneBB, LoopBB);
+        }
+        B.SetInsertPoint(DoneBB);
+      } else {
+        // Aggregate type: use mutex (same as hierarchical for large types)
+        Value *MutexPtr = B.CreateConstGEP1_32(
+            Int32Ty, Ptr, Info.Type->getArrayNumElements());
+        BasicBlock *LoopBB = BasicBlock::Create(
+            KernelF->getContext(),
+            "naive_atomic_mutex_loop_" + Ptr->getName().str(), KernelF);
+        BasicBlock *DoneBB = BasicBlock::Create(
+            KernelF->getContext(),
+            "naive_atomic_mutex_done_" + Ptr->getName().str(), KernelF);
+        B.CreateBr(LoopBB);
+        B.SetInsertPoint(LoopBB);
+        {
+          Value *CASResult = B.CreateAtomicCmpXchg(
+              MutexPtr, ConstantInt::get(Int32Ty, 0),
+              ConstantInt::get(Int32Ty, 1), MaybeAlign(4),
+              AtomicOrdering::SequentiallyConsistent,
+              AtomicOrdering::SequentiallyConsistent);
+          Value *CASSuccess = B.CreateExtractValue(CASResult, 1);
+          B.CreateCondBr(CASSuccess, DoneBB, LoopBB);
+        }
+        B.SetInsertPoint(DoneBB);
+        B.CreateIntrinsic(Intrinsic::nvvm_membar_gl, {}, {});
+        CallInst *MergeCall =
+            B.CreateCall(Info.MergeFn, {Ptr, Info.LocalPtr});
+        MergeCall->setDebugLoc(FirstAndLastLoc.second);
+        B.CreateIntrinsic(Intrinsic::nvvm_membar_gl, {}, {});
+        B.CreateStore(ConstantInt::get(Int32Ty, 0), MutexPtr);
+      }
+    }
+    B.CreateRetVoid();
+    return;
+  }
+
   Value *LaneIdx =
       B.CreateAnd(ThreadIdx, ConstantInt::get(Int32Ty, WarpSize - 1));
 
