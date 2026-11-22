@@ -2,6 +2,8 @@
 
 The repository root builds Kitsune. The `opencilk-project/` subtree builds the OpenCilk frontend and CPU runtime. The Shockwave path uses `cilk-kitsune/ock++` to pass Tapir IR between them. The tiled NTT uses Kitsune Clang directly with `-ftapir=cuda`.
 
+Kitsune leaves the preferred location of shared CUDA allocations unset. CPU and GPU phases can use the same allocation throughout its lifetime. When the compiler requests a prefetch, the runtime uses `cuMemPrefetchAsync` to move the requested range toward the next processor. The prefetch smoke test checks both destinations and queries CUDA's preferred-location attribute after each request.
+
 ## Source revisions
 
 | Component | Source |

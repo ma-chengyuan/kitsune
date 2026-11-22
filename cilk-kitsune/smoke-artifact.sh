@@ -38,7 +38,8 @@ grep -Fq 'Sum of first 17 numbers: 3648 vs 3648' nested.log
 resource=$("$KITSUNE_PATH/bin/clang++" -print-resource-dir)/lib
 cilklib="$resource/x86_64-unknown-linux-gnu"
 "$OPENCILK_PATH/bin/clang++" "$here/test_prefetch_smoke.cpp" -o prefetch \
-  -L"$resource" -L"$cilklib" "-Wl,-rpath,$resource:$cilklib" -lkitrt -lopencilk
+  -I"$CUDA_HOME/include" -L"$resource" -L"$cilklib" "-Wl,-rpath,$resource:$cilklib" \
+  -lkitrt -lopencilk -lcuda
 KITCUDA_BIG_BLOCK_THRESHOLD=4096 ./prefetch
 
 if [[ -n ${ZERA_BENCHMARKS:-} || -n ${ICICLE_INCLUDE:-} ]]; then

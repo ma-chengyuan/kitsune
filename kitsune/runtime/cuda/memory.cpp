@@ -97,14 +97,9 @@ __kitcuda_mem_alloc_managed_internal(size_t size) {
   CUdeviceptr devp;
   CU_SAFE_CALL(cuMemAllocManaged_p(&devp, size, CU_MEM_ATTACH_GLOBAL));
 
-  // Flag the allocation with some CUDA specific flags.  At present these
-  // have little impact given the use of a single device and the default
-  // stream.  Recall that the current practice is for the actual allocation
-  // to occur on first touch -- thus our 'prefetch' status here is a bit
-  // misleading (technically we are not prefetched to either host nor device).
+  // Shared allocations may alternate between CPU and GPU phases. Allow GPU
+  // access and leave the preferred location to the allocation's owner.
   CU_SAFE_CALL(cuMemAdvise_p(devp, size, CU_MEM_ADVISE_SET_ACCESSED_BY,
-                             _kitcuda_device));
-  CU_SAFE_CALL(cuMemAdvise_p(devp, size, CU_MEM_ADVISE_SET_PREFERRED_LOCATION,
                              _kitcuda_device));
 
   int enable = 1;
@@ -344,40 +339,6 @@ void *__kitcuda_mem_gpu_prefetch(void *vp, void *opaque_stream) {
       __kitcuda_set_context();
       vp = base;
 
-      // TODO: More work and experimentation needs to be done with
-      // managed memory and the advice settings...
-
-      // The runtime (and compiler) semantics assume that a prefetch
-      // request implies an inbound kernel launch.  Setting the
-      // preferred location does not cause data to migrate to the GPU
-      // immediately. Instead, it guides the page migration policy
-      // when faults are encountered.
-      //
-      // If the data is already in device memory and the faulting
-      // processor can establish a mapping then migration will be
-      // avoided. Otherwise, if a direct mapping cannot be
-      // established, then data will be migrated to the processor
-      // accessing it.
-      //
-      // Setting the preferred location does not prevent data
-      // prefetching done using cuMemPrefetchAsync() it can also
-      // override the page thrash detection and resolution logic in
-      // the UM driver. Normally, if a page is constantly thrashing
-      // between host and device memory, the driver may eventually pin
-      // the page to host memory. If the preferred location is a
-      // device memory, then the page will continue to thrash
-      // indefinitely.
-      //
-      // If CU_MEM_ADVISE_SET_READ_MOSTLY is also set on this memory,
-      // or any subset of it, then the policies associated with that
-      // advice will override the policies of this advice, unless read
-      // accesses from the device will not result in a read-only copy
-      // being created on that device. See the CUDA docs on the
-      // CU_MEM_ADVISE_SET_READ_MOSTLY advice flag.
-      CU_SAFE_CALL(cuMemAdvise_p((CUdeviceptr)vp, size,
-                                 CU_MEM_ADVISE_SET_PREFERRED_LOCATION,
-                                 _kitcuda_device));
-
       // Issue a prefetch request on the provided stream.  If the given
       // stream is null, create a new stream and return it. Once issued
       // go ahead and mark the memory as having been prefetched.  This
@@ -414,17 +375,6 @@ void *__kitcuda_mem_host_prefetch(void *vp, void *opaque_stream) {
   if (__kitrt_is_mem_prefetched(vp, &size, &base)) {
     if (size > 0) {
       vp = base;
-      // The logic here resets the memory advice from being
-      // GPU-centric to host-side preferred.  The general logic here
-      // is to assume that host-side access suggests pending
-      // operations after the completion of a kernel (somewhat the
-      // inverse model of what happens prior to a kernel launch).
-      //
-      // TODO: A lot of work needs to go into seeing if we can be
-      // smarter about device- and host-side prefetching.
-      CU_SAFE_CALL(cuMemAdvise_p((CUdeviceptr)vp, size,
-                                 CU_MEM_ADVISE_SET_PREFERRED_LOCATION,
-                                 CU_DEVICE_CPU));
       // Issue a prefetch request on the stream associated with the
       // calling thread. Once issued go ahead and mark the memory as
       // no long being prefetched to the device/GPU.  This "mark" does
