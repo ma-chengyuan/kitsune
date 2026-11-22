@@ -166,6 +166,11 @@ if (KITSUNE_CUDA_ENABLED)
   install(FILES ${KITCUDA_BC_FILE} DESTINATION ${CLANG_RESOURCE_SUBDIR}/lib)
 endif()
 
+if(KITSUNE_INCLUDE_TESTS AND KITSUNE_CUDA_ENABLED AND NOT CMAKE_CROSSCOMPILING)
+  enable_testing()
+  add_subdirectory(test)
+endif()
+
 # The KITSUNE_HIP_* variables are defined in ../CMakeLists.txt (i.e. in
 # kitsune/CMakeLists.txt). They are passed in via CMake because the Kitsune
 # runtime is treated as an "ExternalProject".

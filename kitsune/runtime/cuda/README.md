@@ -22,3 +22,16 @@ More information for the implementation details can be found directly in the run
 
 The compiler code generation for CUDA is enabled using the `-ftapir=cuda` flag.  For a complete picture of the connection between the runtime and the compiler referring to both implementations is often important. 
 
+Launch-cache test
+-----------------
+
+With the CUDA target and `KITSUNE_INCLUDE_TESTS` enabled, run the host-only
+launch-cache test with `cmake --build <llvm-build> --target check-kitrt`. The
+test uses the CUDA toolkit headers and supplies its own CUDA driver calls, so it
+can run without a GPU. The binary and CTest registration are in the kitrt build
+directory at `<llvm-build>/tools/kitsune/runtime`.
+
+When the kitrt compiler can link a working ThreadSanitizer runtime, configure
+the LLVM build with `-DKITRT_TEST_THREAD_SANITIZER=ON` to run the instrumented
+test alongside the ordinary test. After building, CTest can also run the tests
+directly with `ctest --test-dir <llvm-build>/tools/kitsune/runtime --output-on-failure`.

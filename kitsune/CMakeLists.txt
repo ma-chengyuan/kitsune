@@ -23,6 +23,8 @@ set(KITSUNE_Fortran_FRONTEND kitfort)
 option(KITSUNE_INCLUDE_TESTS
   "Generate build targets for the Kitsune tests"
   ${LLVM_INCLUDE_TESTS})
+option(KITRT_TEST_THREAD_SANITIZER
+  "Build a ThreadSanitizer variant of the CUDA runtime test" OFF)
 
 # FIXME: Ideally, this should be KITSUNE_KOKKOS_ENABLED (with a D at the end) to
 # be consistent with all the other uses, but leaving it as it is for now because
@@ -583,6 +585,8 @@ ExternalProject_Add(kitrt
              -DKITSUNE_OPENMP_ENABLED=${KITSUNE_OPENMP_ENABLED}
              -DKITSUNE_QTHREADS_ENABLED=${KITSUNE_QTHREADS_ENABLED}
              -DKITSUNE_REALM_ENABLED=${KITSUNE_REALM_ENABLED}
+             -DKITSUNE_INCLUDE_TESTS=${KITSUNE_INCLUDE_TESTS}
+             -DKITRT_TEST_THREAD_SANITIZER=${KITRT_TEST_THREAD_SANITIZER}
              -DKITRT_ENABLE_DEBUG=${KITRT_ENABLE_DEBUG}
              -DKITRT_ENABLE_VERBOSE=${KITRT_ENABLE_VERBOSE}
              -DKITRT_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
@@ -611,6 +615,15 @@ ExternalProject_Add(kitrt
   USES_TERMINAL_INSTALL TRUE
   BUILD_ALWAYS TRUE
   CONFIGURE_HANDLED_BY_BUILD TRUE)
+
+if(KITSUNE_INCLUDE_TESTS AND KITSUNE_CUDA_ENABLED AND NOT CMAKE_CROSSCOMPILING)
+  add_custom_target(check-kitrt
+    COMMAND ${CMAKE_CTEST_COMMAND} --test-dir ${KITSUNE_BINARY_DIR}/runtime
+      --build-config $<CONFIG> --output-on-failure --no-tests=error
+    DEPENDS kitrt
+    USES_TERMINAL VERBATIM)
+  set_target_properties(check-kitrt PROPERTIES FOLDER "Kitsune tests")
+endif()
 
 # Copy the kitsune runtime files into a "staging" area. This allows kitsune to
 # be run from the build directory.

@@ -1,18 +1,3 @@
-// Build from the repository root. Point CUDA_INCLUDE_DIR at the directory
-// containing cuda.h and PHMAP_INCLUDE_DIR at the parallel-hashmap source root.
-// The test supplies the CUDA calls and links no CUDA driver or libkitrt.
-//
-// clang++ -std=c++17 -g -O1 -pthread -fsanitize=thread \
-//   -ffunction-sections -Wl,--gc-sections \
-//   -Ikitsune/runtime -Ikitsune/runtime/cuda \
-//   -I"$CUDA_INCLUDE_DIR" -I"$PHMAP_INCLUDE_DIR" \
-//   kitsune/runtime/cuda/launching.cpp \
-//   kitsune/runtime/test/cuda_launch_cache_test.cpp -o /tmp/cuda-launch-cache
-// TSAN_OPTIONS=halt_on_error=1 timeout 30s /tmp/cuda-launch-cache
-//
-// On Linux, if TSan cannot map its shadow memory, rebuild with -fno-pie
-// -no-pie and run under setarch "$(uname -m)" -R.
-
 #include "kitcuda.h"
 #include "kitcuda_dylib.h"
 
@@ -117,6 +102,10 @@ decltype(cuLaunchKernel_p) cuLaunchKernel_p = launch;
 decltype(cuDeviceGetAttribute_p) cuDeviceGetAttribute_p = nullptr;
 decltype(cuGetErrorName_p) cuGetErrorName_p = nullptr;
 decltype(cuGetErrorString_p) cuGetErrorString_p = nullptr;
+// Scanner functions are linked with the launch code but unused by this test.
+decltype(cuMemAllocAsync_p) cuMemAllocAsync_p = nullptr;
+decltype(cuMemFreeAsync_p) cuMemFreeAsync_p = nullptr;
+decltype(cuMemsetD8Async_p) cuMemsetD8Async_p = nullptr;
 
 extern "C" {
 int _kitcuda_device_id = 0;
