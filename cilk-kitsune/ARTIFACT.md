@@ -1,6 +1,6 @@
 # Clang 19 artifact checkout
 
-The repository root builds Kitsune. The `opencilk-project/` subtree builds the OpenCilk frontend and CPU runtime. The Shockwave path uses `cilk-kitsune/ock++` to pass Tapir IR between them. The tiled NTT uses Kitsune Clang directly with `-ftapir=cuda`.
+The repository root builds Kitsune. Shockwave uses `cilk-kitsune/ock++` to pass Tapir IR from an external OpenCilk frontend to Kitsune's LLVM tools. Kitsune supplies the Cheetah and kitrt libraries and runtime bitcode used by the wrapper. The standalone OpenCilk CPU smoke uses the external compiler's own Cheetah build. The tiled NTT uses Kitsune Clang directly with `-ftapir=cuda`.
 
 Kitsune leaves the preferred location of shared CUDA allocations unset. It initially requests a GPU mapping for indirect access. When a GPU kernel directly uses a buffer with a dedicated allocation, the runtime clears its mapping hint and prefetches the buffer to the GPU. This lets CUDA migrate pages on later accesses by either processor. Small objects that share pool pages retain the mapping because neighboring objects can be in use on the CPU. The prefetch smoke test checks both allocation paths using CUDA's range attributes.
 
@@ -10,23 +10,33 @@ Kitsune leaves the preferred location of shared CUDA allocations unset. It initi
 | --- | --- |
 | Kitsune | Mario's `85ae825fa669`, three commits beyond `049800bad40e` |
 | CUDA lowering | Recovered block-shared allocation lowering and the optional per-thread atomic reduction ablation |
-| OpenCilk | `b644df129866` merged with upstream `dev/19.x` at `dab8218b770b` |
-| OpenCilk Cheetah and productivity tools | `4af05d4cfb7f` and `fc0af2000b79`, included in the frontend subtree |
+| OpenCilk frontend, Cheetah and productivity tools | [External OpenCilk source and revisions](OPENCILK.md) |
 | Kitsune Cheetah | `be3a3e74d391`, fetched by Kitsune's build |
+
+This branch descends from the Kitsune integration through `85ae825fa669`.
+It carries the recovered CUDA lowering from `4002d71d3b05` and
+`e2da16cc57cb`. The 17 replayed root commits through `232b79483332` record
+their original revisions in `Source-commit` trailers.
 
 ## Build and smoke tests
 
-From the checkout root on x86-64 Linux, with CMake, Ninja, Clang, and CUDA installed, run
+On x86-64 Linux the build needs CMake, Ninja, a host Clang and CUDA. Set `OPENCILK_PATH` to a compatible OpenCilk build or install prefix with `bin/clang++`, Cilk headers, and the OpenCilk CPU runtime. Use the frozen artifact build if available. The wrapper requires the patched OpenCilk 19 frontend with `-fopencilk-kitsune` and `-ftapir=none`.
+
+From the Kitsune checkout root, build and test against an existing frontend with
 
 ```sh
 export CUDA_HOME=/usr/local/cuda-12.9
+export OPENCILK_PATH=/path/to/existing-opencilk-build
+export KITSUNE_PATH="$PWD/build/kitsune"
 cilk-kitsune/build-artifact.sh
 cilk-kitsune/smoke-artifact.sh
 ```
 
-`BUILD_DIR` overrides the default `build/` directory. `CMAKE_BUILD_PARALLEL_LEVEL` controls the requested build parallelism. `LLVM_USE_LINKER` can select a host linker such as `lld`. The first build needs access to Kitsune's pinned Cheetah and runtime dependencies.
+To build the frontend as well, prepare the external OpenCilk source tree, use a new build directory for `OPENCILK_PATH`, and run `OPENCILK_SOURCE=/path/to/opencilk-source cilk-kitsune/build-artifact.sh`. Keep the same `OPENCILK_PATH` when running the smoke script. [External source setup](OPENCILK.md)
 
-The smoke script checks CPU and GPU reductions against a serial reference, confirms an actual CUDA launch in the lowered IR, and exercises a GPU loop inside a CPU Cilk loop. It writes intermediate IR, logs and executables under `build/smoke/`. GPU tests use `sm_80` with embedded PTX by default. Set `CUDA_ARCH` to override the target.
+`BUILD_DIR` defaults to `build/` at the Kitsune checkout root. By default the scripts and wrapper look for the toolchains under `$BUILD_DIR/opencilk` and `$BUILD_DIR/kitsune`. Explicit `OPENCILK_PATH` and `KITSUNE_PATH` override those defaults independently. `CMAKE_BUILD_PARALLEL_LEVEL` controls the requested build parallelism. `LLVM_USE_LINKER` can select a host linker such as `lld`. The first Kitsune build needs access to its pinned Cheetah and runtime dependencies.
+
+The smoke script checks CPU and GPU reductions against a serial reference, confirms an actual CUDA launch in the lowered IR, and exercises a GPU loop inside a CPU Cilk loop. It writes intermediate IR, logs and executables under `$BUILD_DIR/smoke/`. GPU tests use `sm_80` with embedded PTX by default. Set `CUDA_ARCH` to override the target.
 
 For the batched NTT, use the paper benchmark checkout at `224660e8e24d`. In a clean checkout of `ingonyama-zk/icicle-snark` at `bf00385db190`, apply `cilk-kitsune/icicle-snark-bf00385-headers.patch` from this repository. It preserves the three modified Icicle headers used in the evaluation environment. Then run
 
@@ -40,17 +50,17 @@ This also checks two BN254 transforms each at sizes `2^12` and `2^21`. The large
 
 ## Regression and parity checks
 
-Run the following from the repository root after building the artifact. The
-Clang and Tapir suites run on the host. The CUDA lowering tests use NVPTX and
+Run the OpenCilk frontend checks with the external build. [Frontend checks](OPENCILK.md)
+
+Run the following from the Kitsune repository root after building the artifact.
+The Tapir suite runs on the host. The CUDA lowering tests use NVPTX and
 the configured CUDA toolkit to inspect host IR, device IR and PTX. The launch
 cache CTest uses a stub CUDA driver. These suites can run without a GPU.
 
 ```sh
-cmake --build build/opencilk --target FileCheck
-build/opencilk/bin/llvm-lit -sv opencilk-project/clang/test/Cilk
-cmake --build build/kitsune --target kitsune-test-depends llc llvm-as llvm-dis
-build/kitsune/bin/llvm-lit -sv llvm/test/Transforms/Tapir
-cmake --build build/kitsune --target check-kitsune check-kitrt
+cmake --build "$KITSUNE_PATH" --target kitsune-test-depends llc llvm-as llvm-dis
+"$KITSUNE_PATH/bin/llvm-lit" -sv llvm/test/Transforms/Tapir
+cmake --build "$KITSUNE_PATH" --target check-kitsune check-kitrt
 ```
 
 On the RTX 5080, run the smoke script above with both NTT dependencies set.
@@ -61,8 +71,22 @@ debug-info transpose fixtures. Intermediate frontend and lowered IR are saved
 in the run directory. The cache test can also run under [ThreadSanitizer](../kitsune/runtime/cuda/README.md#launch-cache-test).
 
 Build the same per-row Shockwave source (`60dd693`) in separate build
-directories with the reference and candidate compilers. Keep their runtime
-libraries separate when comparing changes to kitrt. On the idle RTX 5080 run
+directories with the reference and candidate compilers. For the candidate,
+keep the `OPENCILK_PATH`, `KITSUNE_PATH` and `CUDA_HOME` set above and point
+`ZERA_COMPILER` to the Kitsune checkout. Run from the Shockwave source directory
+
+```sh
+ZERA_COMPILER=/path/to/kitsune-checkout
+launcher="cmake;-E;env;OPENCILK_PATH=$OPENCILK_PATH;KITSUNE_PATH=$KITSUNE_PATH;CUDA_HOME=$CUDA_HOME;PATH=$CUDA_HOME/bin:$PATH;$ZERA_COMPILER/cilk-kitsune/ock++"
+cmake --preset artifact-kitsune -B build-stage2 \
+  -DCMAKE_CXX_COMPILER="$OPENCILK_PATH/bin/clang++" \
+  -DCMAKE_CXX_COMPILER_LAUNCHER="$launcher" \
+  -DCMAKE_CXX_LINKER_LAUNCHER="$launcher"
+cmake --build build-stage2 --target cu-zksnark
+```
+
+Keep the builds' runtime libraries separate when comparing changes to kitrt.
+On the idle RTX 5080 run
 
 ```sh
 python3 cilk-kitsune/compare-shockwave.py \

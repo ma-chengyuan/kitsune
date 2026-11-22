@@ -2,10 +2,14 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-build=$(cd "${BUILD_DIR:-$here/../build}" && pwd)
-export OPENCILK_PATH="$build/opencilk" KITSUNE_PATH="$build/kitsune"
-export CUDA_HOME=${CUDA_HOME:-/usr/local/cuda}
-export PATH="$CUDA_HOME/bin:$PATH"
+root=$(dirname "$here")
+source "$here/artifact-env.sh"
+require_opencilk_frontend
+if [[ ! -f "$KITSUNE_PATH/bin/clang++" || ! -x "$KITSUNE_PATH/bin/clang++" ]]; then
+  printf 'Kitsune compiler is missing or not executable at %s. Set KITSUNE_PATH to its build prefix or run cilk-kitsune/build-artifact.sh.\n' "$KITSUNE_PATH/bin/clang++" >&2
+  exit 1
+fi
+
 export CILK_NWORKERS=${CILK_NWORKERS:-2}
 arch=${CUDA_ARCH:-sm_80}
 mkdir -p "$build/smoke"

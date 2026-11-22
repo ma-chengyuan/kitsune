@@ -20,7 +20,24 @@ Usage:
 
 Options:
     Those you would normally pass to clang++.
+
+Environment:
+    OPENCILK_PATH   Compatible OpenCilk build or install prefix
+    KITSUNE_PATH    Kitsune build prefix
+    BUILD_DIR       Default parent directory for the opencilk and kitsune prefixes
 """
+
+ARTIFACT_DIR = Path(__file__).resolve().parent
+
+
+def require_tool(prefix: Path, executable: str, variable: str) -> Path:
+    path = prefix / "bin" / executable
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise SystemExit(
+            f"Missing or non-executable tool at {path}. Set {variable} to the "
+            "toolchain prefix or follow cilk-kitsune/ARTIFACT.md."
+        )
+    return path
 
 
 # Define color codes for different log levels
@@ -65,12 +82,16 @@ logger.addHandler(handler)
 
 
 class Invocation:
-    cilk_path = os.environ.get(
-        "OPENCILK_PATH", "/home/mrowkam/git-repos/opencilk/build"
-    )
-    kitsune_path = os.environ.get(
-        "KITSUNE_PATH", "/home/mrowkam/git-repos/kitsune/build"
-    )
+    def __init__(self) -> None:
+        build = Path(os.environ.get("BUILD_DIR") or ARTIFACT_DIR.parent / "build")
+        self.cilk_path = Path(
+            os.environ.get("OPENCILK_PATH") or build / "opencilk"
+        ).absolute()
+        self.kitsune_path = Path(
+            os.environ.get("KITSUNE_PATH") or build / "kitsune"
+        ).absolute()
+        self.kitsune_lib = self.kitsune_path / "lib/clang/19/lib"
+        self.kitsune_cilk_lib = self.kitsune_lib / "x86_64-unknown-linux-gnu"
 
     clang_args: list[str] = []
     opt_args: list[str] = []
@@ -190,7 +211,7 @@ class Invocation:
             elif arg == "--version":
                 # Just run clang++ --version
                 ret._run_command(
-                    [f"{ret.cilk_path}/bin/clang++", "--version"],
+                    [require_tool(ret.cilk_path, "clang++", "OPENCILK_PATH"), "--version"],
                     "OpenCilk compiler version",
                 )
                 sys.exit(0)
@@ -278,7 +299,7 @@ class Invocation:
 
         self._run_command(
             [
-                f"{self.cilk_path}/bin/{self.cc}",
+                require_tool(self.cilk_path, self.cc, "OPENCILK_PATH"),
                 self.input_file,
                 # Disable some aggressive optimizations --- they should be done after
                 # code is flipped to device side
@@ -318,6 +339,16 @@ class Invocation:
     def run_kitsune_lowering(self) -> None:
         """Run Kitsune's opt for IR lowering."""
 
+        opt = require_tool(self.kitsune_path, "opt", "KITSUNE_PATH")
+        opencilk_bitcode = self.kitsune_cilk_lib / "libopencilk-abi.bc"
+        kitcuda_bitcode = self.kitsune_lib / "kitcuda.bc"
+        for bitcode in (opencilk_bitcode, kitcuda_bitcode):
+            if not bitcode.is_file():
+                raise SystemExit(
+                    f"Missing Kitsune runtime bitcode at {bitcode}. Check KITSUNE_PATH "
+                    "or run cilk-kitsune/build-artifact.sh."
+                )
+
         # TODO: re-introduce vectorization after tapir lowering
 
         debug_flags = [
@@ -329,14 +360,14 @@ class Invocation:
 
         self._run_command(
             [
-                f"{self.kitsune_path}/bin/opt",
+                opt,
                 f"-passes=tapir-lowering<O{self.opt_level}>,tapir-memops-replacement",
                 # These flags are for lowering to OpenCilk
                 "--tapir-target=opencilk",
                 "--use-opencilk-runtime-bc",
-                f"--opencilk-runtime-bc-path={self.kitsune_path}/lib/clang/19/lib/x86_64-unknown-linux-gnu/libopencilk-abi.bc",
+                f"--opencilk-runtime-bc-path={opencilk_bitcode}",
                 "--use-kitcuda-runtime-bc",
-                f"--kitcuda-runtime-bc-path={self.kitsune_path}/lib/clang/19/lib/kitcuda.bc",
+                f"--kitcuda-runtime-bc-path={kitcuda_bitcode}",
                 "--cuabi-embed-ptx",
                 # *debug_flags,
                 "-S",
@@ -386,7 +417,7 @@ class Invocation:
 
     @property
     def kitmalloc_path(self) -> Path:
-        return Path(__file__).parent / "kitcuda_malloc.cpp"
+        return ARTIFACT_DIR / "kitcuda_malloc.cpp"
 
     def compile_executable(self) -> None:
         """Compile the assembly to an executable."""
@@ -406,13 +437,11 @@ class Invocation:
             + list(self.object_files)
         )
 
-        kitrt_dir = f"{self.kitsune_path}/lib/clang/19/lib"
-        opencilk_dir = f"{self.kitsune_path}/lib/clang/19/lib/x86_64-unknown-linux-gnu"
-        cuda_home = os.environ.get("CUDA_HOME", "/opt/cuda")
+        cuda_home = Path(os.environ.get("CUDA_HOME") or "/usr/local/cuda").absolute()
 
         self._run_command(
             [
-                f"{self.kitsune_path}/bin/kit++",
+                require_tool(self.kitsune_path, "kit++", "KITSUNE_PATH"),
                 *input_files,
                 *([self.kitmalloc_path] if self.replace_malloc else []),
                 f"-O{self.opt_level}",
@@ -422,13 +451,13 @@ class Invocation:
                 f"-Wl,-rpath,{cuda_home}/lib64",
                 "-lcudart",
                 # Link in OpenCilk runtime
-                f"-L{opencilk_dir}",
-                f"-Wl,-rpath,{opencilk_dir}",
+                f"-L{self.kitsune_cilk_lib}",
+                f"-Wl,-rpath,{self.kitsune_cilk_lib}",
                 "-lopencilk",
                 "-lopencilk-personality-cpp",
                 # Link in Kitsune runtime
-                f"-L{kitrt_dir}",
-                f"-Wl,-rpath,{kitrt_dir}",
+                f"-L{self.kitsune_lib}",
+                f"-Wl,-rpath,{self.kitsune_lib}",
                 "-lkitrt",
             ],
             f"Kitsune compiler compiled to binary",
@@ -449,7 +478,7 @@ class Invocation:
 
         self._run_command(
             [
-                f"{self.kitsune_path}/bin/kitcc",
+                require_tool(self.kitsune_path, "kitcc", "KITSUNE_PATH"),
                 f"-O{self.opt_level}",
                 self.lowered_llvm_ir_output_file,
                 *self.linker_args,
