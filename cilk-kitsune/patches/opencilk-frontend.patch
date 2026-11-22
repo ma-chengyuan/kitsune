@@ -1,0 +1,493 @@
+diff --git a/clang/include/clang/Basic/Attr.td b/clang/include/clang/Basic/Attr.td
+index 97c83cd0c7ec3dae349f17909cc1b0b17c0ac6d8..0ea094ea56df44c8874bf99bc7f5f68c2b475b00 100644
+--- a/clang/include/clang/Basic/Attr.td
++++ b/clang/include/clang/Basic/Attr.td
+@@ -4109,6 +4109,47 @@ def InitSeg : Attr {
+   }];
+ }
+
++def TapirTarget : StmtAttr {
++  let Spellings = [CXX11<"tapir","target">];
++
++  // FIXME KITSUNE: The target attribute is currently set to be valid on all
++  // statements because of the need to add this to Kokkos. We should either:
++  //
++  //   - Remove the Forall statement from the subject list and have it apply to
++  //     all statements and check when parsing that it is on a statement that
++  //     we actually care about.
++  //
++  //   - Or, and we should prefer this if possible, identify exactly what the
++  //     Kokkos construct is and add just that statement class to this subject
++  //     list.
++  //
++  let Subjects = SubjectList<[CilkForStmt, Stmt],
++                             ErrorDiag, "'parallel' statements">;
++  let Args = [
++    EnumArgument<"TapirTargetAttrType", "TapirTargetAttrTy", /*is_string=*/ true,
++                 ["none", "serial", "cuda", "hip", "opencilk", "openmp",
++                  "qthreads", "realm"],
++                 ["None", "Serial", "Cuda", "Hip", "OpenCilk", "OpenMP",
++                  "Qthreads", "Realm"],
++                 0>
++  ];
++  let Documentation = [TapirRTDocs];
++}
++
++def TapirDeferredSync : StmtAttr {
++  let Spellings = [CXX11<"tapir","deferred_sync">];
++  let Subjects = SubjectList<[CilkForStmt], ErrorDiag, "'parallel for' statements">;
++  let Args = [];
++  let Documentation = [TapirRTDocs];
++}
++
++def TapirGrainSize : StmtAttr {
++  let Spellings = [CXX11<"tapir","grain_size">];
++  let Subjects = SubjectList<[CilkForStmt], ErrorDiag, "'parallel for' statements">;
++  let Args = [UnsignedArgument<"GrainSize">];
++  let Documentation = [TapirRTDocs];
++}
++
+ def LoopHint : Attr {
+   /// #pragma clang loop <option> directive
+   /// vectorize: vectorizes loop operations if State == Enable.
+diff --git a/clang/include/clang/Basic/AttrDocs.td b/clang/include/clang/Basic/AttrDocs.td
+index bd542fff03ea6182d938867b22b49af567331ec9..7c2e5025111d15e410ef5593c9aa28797cf04ca8 100644
+--- a/clang/include/clang/Basic/AttrDocs.td
++++ b/clang/include/clang/Basic/AttrDocs.td
+@@ -48,6 +48,42 @@ This page lists the attributes currently supported by Clang.
+ }];
+ }
+
++def KitsuneDocs : DocumentationCategory<"Kitsune Attributes"> {
++  let Content = [{
++Tapir and Kitsune introduce custom C++ attributres that let developer
++control behaviors at the source code level vs. only through command line
++arguments.
++  }];
++}
++
++def TapirRTDocs : Documentation {
++  let Category = KitsuneDocs;
++  let Content = [{
++
++**Experimental**
++
++The kitsune/tapir runtime target attribute `rt_target` let's developers target a
++specific runtime at the source level vs. using a command line argument to
++apply the target to all constructs.  The current target runtime are:
++
++- cilk     : Cilk runtime system.
++- cuda     : Nvidia's cuda runtime.
++- hip      : AMD's (cuda-ish) hip runtime.
++- libomp   : The OpenMP runtime
++- qthreads : The Qthreads library
++- realm    : The Realm runtime (lower level of the Legion Programming System)
++- rocm     : AMD's Rocm runtime.
++- zero     : Intel's Level Zero runtime.
++
++Example:
++
++.. code-block:: c++
++
++  [[kitsune:rt_target("cilk")]]
++  forall(...) {
++  }];
++}
++
+ def SectionDocs : Documentation {
+   let Category = DocCatVariable;
+   let Content = [{
+diff --git a/clang/include/clang/Basic/Cilk.h b/clang/include/clang/Basic/Cilk.h
+index ff7055dee0d64889c82ba656a8b61dbe522a19c3..dc6dc7b10a2f30ab5ad0adda8ee11e26e73e9bfe 100644
+--- a/clang/include/clang/Basic/Cilk.h
++++ b/clang/include/clang/Basic/Cilk.h
+@@ -18,6 +18,8 @@ enum CilkOption : uint64_t {
+   // Each Cilk option is mapped to a distinct bit.  Currently we support at most
+   // 64 Cilk options.
+   CilkOpt_Pedigrees = 1ULL << 0,
++  // For Kitsune-facing hacks.
++  CilkOpt_Kitsune = 1ULL << 1,
+ };
+
+ struct CilkOptionSet {
+diff --git a/clang/include/clang/Basic/DiagnosticSemaKinds.td b/clang/include/clang/Basic/DiagnosticSemaKinds.td
+index 9657429ab1407623cd4a4c8cb79bce699f6ccca6..e68e29554581c7bb912f2cf6aa2d9fbda3daeca0 100644
+--- a/clang/include/clang/Basic/DiagnosticSemaKinds.td
++++ b/clang/include/clang/Basic/DiagnosticSemaKinds.td
+@@ -12722,4 +12722,10 @@ def err_acc_loop_spec_conflict
+ // AMDGCN builtins diagnostics
+ def err_amdgcn_global_load_lds_size_invalid_value : Error<"invalid size value">;
+ def note_amdgcn_global_load_lds_size_valid_value : Note<"size must be 1, 2, or 4">;
++
++// Tapir target attribute
++def err_tapir_target_attr_unsupported_stmt: Error<
++  "tapir target attribute on unsupported statement">;
++def err_tapir_target_unknown: Error<
++  "unknown tapir target">;
+ } // end of sema component.
+diff --git a/clang/include/clang/Driver/Options.td b/clang/include/clang/Driver/Options.td
+index 00ccb0e64200108087864b00e4fc3078d389bf09..a40eb74a5787e67945f41aa37d5c238faf3ec7cc 100644
+--- a/clang/include/clang/Driver/Options.td
++++ b/clang/include/clang/Driver/Options.td
+@@ -3337,6 +3337,9 @@ def fcilkplus : Flag<["-"], "fcilkplus">, Group<f_Group>,
+ def fopencilk : Flag<["-"], "fopencilk">, Group<f_Group>,
+   Visibility<[ClangOption, CC1Option]>,
+   HelpText<"Enable OpenCilk extensions">;
++def fopencilk_kitsune : Flag<["-"], "fopencilk-kitsune">, Group<f_Group>,
++  Visibility<[ClangOption, CC1Option]>,
++  HelpText<"Enable OpenCilk compilation for Kitsune">;
+ def static_libopencilk : Flag<["-"], "static-libopencilk">;
+ def opencilk_resource_dir_EQ : Joined<["--"], "opencilk-resource-dir=">,
+   Flags<[NoXarchOption]>,
+diff --git a/clang/include/clang/Sema/Sema.h b/clang/include/clang/Sema/Sema.h
+index caa187a33877e6bc6ba0af6a0eca40c10d8a3934..bba4e810c05d573debb0bba9028d790eab2e29fe 100644
+--- a/clang/include/clang/Sema/Sema.h
++++ b/clang/include/clang/Sema/Sema.h
+@@ -32,6 +32,7 @@
+ #include "clang/AST/NSAPI.h"
+ #include "clang/AST/PrettyPrinter.h"
+ #include "clang/AST/StmtCXX.h"
++#include "clang/AST/StmtCilk.h"
+ #include "clang/AST/TypeLoc.h"
+ #include "clang/AST/TypeOrdering.h"
+ #include "clang/Basic/BitmaskEnum.h"
+diff --git a/clang/lib/CodeGen/CGCilk.cpp b/clang/lib/CodeGen/CGCilk.cpp
+index 138e622d747c98827505da1c546e574c635196c5..80212971321f61cd5b13f2eda56cc3454559bc3f 100644
+--- a/clang/lib/CodeGen/CGCilk.cpp
++++ b/clang/lib/CodeGen/CGCilk.cpp
+@@ -881,8 +881,61 @@ template <typename LoopStmt> static bool hasEmptyLoopBody(const LoopStmt &S) {
+   return false;
+ }
+
++// If a tapir target attribute exists, it will override the tapir target
++// specified on the command line - if any. If a tapir target attribute does not
++// exist and one was specified on the command line, that will be returned.
++std::optional<llvm::TapirTargetID>
++GetTapirTargetAttr(ArrayRef<const Attr *> Attrs, CodeGenModule &CGM) {
++  // FIXME KITSUNE: This will check for the first occurrence of the tapir target
++  // attribute and break immediately if it finds it. Is this what we actually
++  // want?
++  for (auto curAttr : Attrs) {
++    if (curAttr->getKind() == attr::TapirTarget) {
++      switch (cast<const TapirTargetAttr>(curAttr)->getTapirTargetAttrType()) {
++      case TapirTargetAttr::None:
++        return llvm::TapirTargetID::None;
++      case TapirTargetAttr::Serial:
++        return llvm::TapirTargetID::Serial;
++      case TapirTargetAttr::Cuda:
++        return llvm::TapirTargetID::Cuda;
++      // TODO: uncomment if want to test on AMD
++      // case TapirTargetAttr::Hip:
++      //   return llvm::TapirTargetID::Hip;
++      case TapirTargetAttr::OpenCilk:
++        return llvm::TapirTargetID::OpenCilk;
++      // case TapirTargetAttr::OpenMP:
++      //   return llvm::TapirTargetID::OpenMP;
++      case TapirTargetAttr::Qthreads:
++        return llvm::TapirTargetID::Qthreads;
++        // case TapirTargetAttr::Realm:
++        //   return llvm::TapirTargetID::Realm;
++      }
++      // We don't put this in a default block in the switch above because it
++      // results in compiler warnings about default blocks in a switch where all
++      // enumeration values are handled. But we want this error in case a new
++      // tapir target is added, but this code is not updated.
++      llvm_unreachable("Tapir target not handled");
++    }
++  }
++  // return CGM.getCodeGenOpts().getTapirTarget();
++  return llvm::TapirTargetID::OpenCilk;
++}
++
+ void CodeGenFunction::EmitCilkForStmt(const CilkForStmt &S,
+                                       ArrayRef<const Attr *> ForAttrs) {
++  // A forall may have attributes but no tapir target so we can't simply
++  // check if the attributes are empty.
++  std::optional<llvm::TapirTargetID> TT = GetTapirTargetAttr(ForAttrs, CGM);
++  LoopStack.setLoopTarget(TT);
++  for (auto *curAttr : ForAttrs) {
++    if (curAttr->getKind() == attr::TapirDeferredSync) {
++      LoopStack.setDeferredSync(true);
++    } else if (curAttr->getKind() == attr::TapirGrainSize) {
++      LoopStack.setTapirGrainsize(
++          cast<TapirGrainSizeAttr>(curAttr)->getGrainSize());
++    }
++  }
++
+   JumpDest LoopExit = getJumpDestInCurrentScope("pfor.end");
+
+   PushSyncRegion();
+diff --git a/clang/lib/CodeGen/CGLoopInfo.cpp b/clang/lib/CodeGen/CGLoopInfo.cpp
+index 672d292a9210636bcb126a32058d26611a9adede..8f2b062582c066aad0195c18903b088321fa8894 100644
+--- a/clang/lib/CodeGen/CGLoopInfo.cpp
++++ b/clang/lib/CodeGen/CGLoopInfo.cpp
+@@ -459,11 +459,10 @@ LoopAttributes::LoopAttributes(bool IsParallel)
+       UnrollAndJamEnable(LoopAttributes::Unspecified),
+       VectorizePredicateEnable(LoopAttributes::Unspecified), VectorizeWidth(0),
+       VectorizeScalable(LoopAttributes::Unspecified), InterleaveCount(0),
+-      UnrollCount(0), UnrollAndJamCount(0),
+-      TapirGrainsize(0),
++      UnrollCount(0), UnrollAndJamCount(0), TapirGrainsize(0),
+       DistributeEnable(LoopAttributes::Unspecified), PipelineDisabled(false),
+       PipelineInitiationInterval(0), CodeAlign(0), MustProgress(false),
+-      SpawnStrategy(LoopAttributes::Sequential) {}
++      SpawnStrategy(LoopAttributes::Sequential), DeferredSync(false) {}
+
+ void LoopAttributes::clear() {
+   IsParallel = false;
+@@ -539,6 +538,22 @@ void LoopInfo::getTapirLoopProperties(
+                                                  Attrs.TapirGrainsize))};
+     LoopProperties.push_back(MDNode::get(Ctx, Vals));
+   }
++  // Setting tapir.loop.target. A target may not have been set and we do not
++  // have a reasonable "default". If we don't have a target, don't add the
++  // metadata.
++  if (Attrs.LoopTarget) {
++    Metadata *Vals[] = {
++        MDString::get(Ctx, "tapir.loop.target"),
++        ConstantAsMetadata::get(ConstantInt::get(llvm::Type::getInt32Ty(Ctx),
++                                                 unsigned(*Attrs.LoopTarget)))};
++    LoopProperties.push_back(MDNode::get(Ctx, Vals));
++  }
++  if (Attrs.DeferredSync) {
++    Metadata *Vals[] = {MDString::get(Ctx, "tapir.loop.deferred_sync"),
++                        ConstantAsMetadata::get(
++                            ConstantInt::get(llvm::Type::getInt1Ty(Ctx), 1))};
++    LoopProperties.push_back(MDNode::get(Ctx, Vals));
++  }
+ }
+
+ void LoopInfo::finish() {
+diff --git a/clang/lib/CodeGen/CGLoopInfo.h b/clang/lib/CodeGen/CGLoopInfo.h
+index aa16c9c4b3cccd511966aff3351bc8c76dd6f1c5..04eb1a0a2d772a5cefdc414dfb35e27b7bd4453d 100644
+--- a/clang/lib/CodeGen/CGLoopInfo.h
++++ b/clang/lib/CodeGen/CGLoopInfo.h
+@@ -19,6 +19,7 @@
+ #include "llvm/IR/DebugLoc.h"
+ #include "llvm/IR/Value.h"
+ #include "llvm/Support/Compiler.h"
++#include "llvm/Transforms/Tapir/TapirTargetIDs.h"
+
+ namespace llvm {
+ class BasicBlock;
+@@ -93,6 +94,12 @@ struct LoopAttributes {
+
+   /// Value for tapir.loop.spawn.strategy metadata.
+   LSStrategy SpawnStrategy;
++
++  /// Value for tapir.loop.target metadata.
++  std::optional<llvm::TapirTargetID> LoopTarget;
++
++  /// Value for tapir.loop.deferred_sync metadata.
++  bool DeferredSync;
+ };
+
+ /// Information used when generating a structured loop.
+@@ -315,6 +322,14 @@ public:
+   /// Set the Tapir-loop grainsize for the next loop pushed.
+   void setTapirGrainsize(unsigned C) { StagedAttrs.TapirGrainsize = C; }
+
++  /// Set the Tapir loop target
++  void setLoopTarget(std::optional<llvm::TapirTargetID> LT) {
++    StagedAttrs.LoopTarget = LT;
++  }
++
++  /// Set the Tapir deferred sync
++  void setDeferredSync(bool DS) { StagedAttrs.DeferredSync = DS; }
++
+   /// Returns true if there is LoopInfo on the stack.
+   bool hasInfo() const { return !Active.empty(); }
+   /// Return the LoopInfo for the current loop. HasInfo should be called
+diff --git a/clang/lib/Driver/ToolChains/Clang.cpp b/clang/lib/Driver/ToolChains/Clang.cpp
+index 69e18d1f4a0d179e10e224492870452708d2b4ed..d66b70eab88bc83c2c1aead0576743bdcb2d1361 100644
+--- a/clang/lib/Driver/ToolChains/Clang.cpp
++++ b/clang/lib/Driver/ToolChains/Clang.cpp
+@@ -6633,6 +6633,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
+   Args.AddLastArg(CmdArgs, options::OPT_fcilkplus);
+   Args.AddLastArg(CmdArgs, options::OPT_fopencilk);
+   Args.AddLastArg(CmdArgs, options::OPT_ftapir_EQ);
++  Args.AddLastArg(CmdArgs, options::OPT_fopencilk_kitsune);
+   if (Args.hasArg(options::OPT_fcilkplus) ||
+       Args.hasArg(options::OPT_fopencilk) ||
+       Args.hasArg(options::OPT_ftapir_EQ)) {
+diff --git a/clang/lib/Frontend/CompilerInvocation.cpp b/clang/lib/Frontend/CompilerInvocation.cpp
+index daf7b2f1571e5b8edfbaa6d40cf4d6f05a1070e1..c715f776602f2e99a9a525d8d2f0d20bd1d72bd9 100644
+--- a/clang/lib/Frontend/CompilerInvocation.cpp
++++ b/clang/lib/Frontend/CompilerInvocation.cpp
+@@ -3730,7 +3730,7 @@ void CompilerInvocationBase::GenerateLangArgs(const LangOptions &Opts,
+     GenerateArg(Consumer, OPT_mignore_xcoff_visibility);
+
+   if (Opts.getCilk() == LangOptions::Cilk_opencilk)
+-    GenerateArg(Consumer, OPT_fopencilk);
++    GenerateArg(Consumer, Opts.CilkOptions.has(CilkOpt_Kitsune) ? OPT_fopencilk_kitsune : OPT_fopencilk);
+   if (Opts.getCilk() == LangOptions::Cilk_plus)
+     GenerateArg(Consumer, OPT_fcilkplus);
+   if (Opts.CilkOptions.has(CilkOpt_Pedigrees))
+@@ -4155,6 +4155,11 @@ bool CompilerInvocation::ParseLangArgs(LangOptions &Opts, ArgList &Args,
+   } else if (CilkPlus) {
+     Opts.setCilk(LangOptions::Cilk_plus);
+   }
++  if (Args.hasArg(OPT_fopencilk_kitsune)) {
++    // This allows reducer operations to be emitted in the IR.
++    Opts.setCilk(LangOptions::Cilk_opencilk);
++    Opts.CilkOptions.set(CilkOpt_Kitsune, true);
++  }
+
+   if (Opts.getCilk() != LangOptions::Cilk_none && Opts.ObjC)
+     Diags.Report(diag::err_drv_cilk_objc);
+diff --git a/clang/lib/Sema/SemaExpr.cpp b/clang/lib/Sema/SemaExpr.cpp
+index a190f71d092dcd24feea7dc65d824fb1c54c2e58..65d42eb2665fa0e3a61675eb36143b493cce08c2 100644
+--- a/clang/lib/Sema/SemaExpr.cpp
++++ b/clang/lib/Sema/SemaExpr.cpp
+@@ -2302,7 +2302,10 @@ Expr *Sema::BuildHyperobjectLookup(Expr *E, bool Pointer) {
+   Expr *VarAddr;
+   if (Pointer) {
+     VarAddr = E;
+-  } else if (HT->getElementType()->isDependentType()) {
++  } else if (ResultType->isDependentType() ||
++             (CurContext->isDependentContext() && E->isLValue())) {
++    // Instantiation rebuilds unary & on a reducer as the address of its
++    // current view. The lookup itself needs the address of the reducer.
+     ExprResult Address =
+       BuildBuiltinCallExpr(Loc, Builtin::BI__builtin_addressof, E);
+     assert(Address.isUsable());
+diff --git a/clang/lib/Sema/SemaStmtAttr.cpp b/clang/lib/Sema/SemaStmtAttr.cpp
+index 29438ae7e2511c720b379276b6ccbbaa71794378..6f3f83f4e4035c65babfdc1bc64486d0075afa4c 100644
+--- a/clang/lib/Sema/SemaStmtAttr.cpp
++++ b/clang/lib/Sema/SemaStmtAttr.cpp
+@@ -644,6 +644,57 @@ static Attr *handleHLSLLoopHintAttr(Sema &S, Stmt *St, const ParsedAttr &A,
+   return ::new (S.Context) HLSLLoopHintAttr(S.Context, A, UnrollFactor);
+ }
+
++static Attr *handleTapirTargetAttr(Sema &S, Stmt *St, const ParsedAttr &A,
++                                   SourceRange Range) {
++  StringRef targetStr;
++  SourceLocation argLoc;
++  S.checkStringLiteralArgumentAttr(A, 0, targetStr, &argLoc);
++  if (!S.checkStringLiteralArgumentAttr(A, 0, targetStr, &argLoc)) {
++    S.Diag(A.getLoc(), diag::err_tapir_target_unknown);
++    return nullptr;
++  }
++
++  TapirTargetAttr::TapirTargetAttrTy tapirTK;
++  if (!TapirTargetAttr::ConvertStrToTapirTargetAttrTy(targetStr, tapirTK)) {
++    S.Diag(A.getLoc(), diag::err_tapir_target_unknown) << targetStr << argLoc;
++    return nullptr;
++  }
++
++  // We only support a limited range of statements.  Make sure we are
++  // dealing with one of them -- if not return an error.
++  //
++  // The attribute is not currently supported on spawn and sync statements.
++  //
++  if (St->getStmtClass() == Stmt::CilkForStmtClass) {
++    return ::new (S.Context) TapirTargetAttr(S.Context, A, tapirTK);
++  }
++  S.Diag(A.getLoc(), diag::err_tapir_target_attr_unsupported_stmt);
++  return nullptr;
++}
++
++static Attr *handleTapirDeferredSyncAttr(Sema &S, Stmt *St,
++                                         const ParsedAttr &A) {
++  if (St->getStmtClass() == Stmt::CilkForStmtClass) {
++    return ::new (S.Context) TapirDeferredSyncAttr(S.Context, A);
++  }
++  S.Diag(A.getLoc(), diag::err_tapir_target_attr_unsupported_stmt);
++  return nullptr;
++}
++
++static Attr *handleTapirGrainSizeAttr(Sema &S, Stmt *St, const ParsedAttr &A,
++                                      SourceRange Range) {
++  if (St->getStmtClass() == Stmt::CilkForStmtClass) {
++    Expr *E = A.getArgAsExpr(0);
++    llvm::APSInt ValueAPS;
++    S.CheckLoopHintExpr(E, Range.getBegin(), false);
++    S.VerifyIntegerConstantExpression(E, &ValueAPS);
++    return ::new (S.Context)
++        TapirGrainSizeAttr(S.Context, A, ValueAPS.getExtValue());
++  }
++  S.Diag(A.getLoc(), diag::err_tapir_target_attr_unsupported_stmt);
++  return nullptr;
++}
++
+ static Attr *ProcessStmtAttribute(Sema &S, Stmt *St, const ParsedAttr &A,
+                                   SourceRange Range) {
+   if (A.isInvalid() || A.getKind() == ParsedAttr::IgnoredAttribute)
+@@ -698,6 +749,12 @@ static Attr *ProcessStmtAttribute(Sema &S, Stmt *St, const ParsedAttr &A,
+     return handleCodeAlignAttr(S, St, A);
+   case ParsedAttr::AT_MSConstexpr:
+     return handleMSConstexprAttr(S, St, A, Range);
++  case ParsedAttr::AT_TapirTarget:
++    return handleTapirTargetAttr(S, St, A, Range);
++  case ParsedAttr::AT_TapirDeferredSync:
++    return handleTapirDeferredSyncAttr(S, St, A);
++  case ParsedAttr::AT_TapirGrainSize:
++    return handleTapirGrainSizeAttr(S, St, A, Range);
+   default:
+     // N.B., ClangAttrEmitter.cpp emits a diagnostic helper that ensures a
+     // declaration attribute is not written on a statement, but this code is
+diff --git a/clang/test/Cilk/hyper-template-single-lookup.cpp b/clang/test/Cilk/hyper-template-single-lookup.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..b9161168232b308adff6855daa6d9abc5dff9c72
+--- /dev/null
++++ b/clang/test/Cilk/hyper-template-single-lookup.cpp
+@@ -0,0 +1,20 @@
++// RUN: %clang_cc1 %s -fopencilk -emit-llvm -disable-llvm-passes -o - | FileCheck %s
++
++struct Sum {
++  void operator+=(int);
++};
++void init(void *);
++void merge(void *, void *);
++
++template <typename T> void accumulate(T n) {
++  Sum cilk_reducer(init, merge) sum;
++  _Cilk_for (int i = 0; i < n; ++i)
++    sum += i;
++}
++template void accumulate(int);
++
++// A stolen iteration must use the view returned by the first lookup.
++// CHECK-LABEL: define {{.*}}accumulate
++// CHECK: %[[VIEW:[^ ]+]] = call ptr @llvm.hyper.lookup.i64(ptr %sum,
++// CHECK-NOT: call ptr @llvm.hyper.lookup
++// CHECK: {{call|invoke}} void @_ZN3SumpLEi(ptr {{[^,]*}}%[[VIEW]],
+diff --git a/llvm/include/llvm/Transforms/Tapir/TapirTargetIDs.h b/llvm/include/llvm/Transforms/Tapir/TapirTargetIDs.h
+index 0e6f717a268fdd1a1598c05945f1866693648feb..a4531577e32d8a8d1d02994dd74a3e202440e713 100644
+--- a/llvm/include/llvm/Transforms/Tapir/TapirTargetIDs.h
++++ b/llvm/include/llvm/Transforms/Tapir/TapirTargetIDs.h
+@@ -21,12 +21,16 @@ namespace llvm {
+ enum class TapirTargetID {
+   None,     // Perform no lowering
+   Serial,   // Lower to serial projection
+-  Cheetah,  // Lower to the Cheetah ABI
+-  Cilk,     // Lower to the Cilk Plus ABI
++  Cuda,     // Lower to Cuda ABI
++  Hip,      // Lower to the Hip (AMD GPU) ABI
+   Lambda,   // Lower to generic Lambda ABI
+   OMPTask,  // Lower to OpenMP task ABI
+   OpenCilk, // Lower to OpenCilk ABI
+-  Qthreads, // Lower to Qthreads
++  OpenMP,   // Lower to OpenMP (TODO: Needs to be updated)
++  Qthreads, // Lower to Qthreads (TODO: Needs to be updated)
++  Realm,    // Lower to Realm (TODO: Needs to be updated)
++  Cheetah,  // Lower to the Cheetah ABI
++  Cilk,     // Lower to the Cilk Plus ABI
+   Last_TapirTargetID
+ };
+
+diff --git a/llvm/lib/Analysis/TargetLibraryInfo.cpp b/llvm/lib/Analysis/TargetLibraryInfo.cpp
+index f2229be649d0bc4f5d4b1994a0c7e958d0c765cc..c408d933ca6c39842ebcb32e900153bbff11ce61 100644
+--- a/llvm/lib/Analysis/TargetLibraryInfo.cpp
++++ b/llvm/lib/Analysis/TargetLibraryInfo.cpp
+@@ -1390,6 +1390,10 @@ void TargetLibraryInfoImpl::addTapirTargetLibraryFunctions(
+   case TapirTargetID::Lambda:
+   case TapirTargetID::OMPTask:
+   case TapirTargetID::Qthreads:
++  case TapirTargetID::Cuda:
++  case TapirTargetID::Hip:
++  case TapirTargetID::OpenMP:
++  case TapirTargetID::Realm:
+   case TapirTargetID::Last_TapirTargetID:
+     break;
+   }

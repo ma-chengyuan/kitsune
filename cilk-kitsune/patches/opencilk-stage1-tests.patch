@@ -1,0 +1,118 @@
+diff --git a/clang/test/Cilk/cilkfor-bounds.cpp b/clang/test/Cilk/cilkfor-bounds.cpp
+index cbacd3c2b8dd077887b32e4d115dd88758633b34..4cc010b811df4bece2776c8b1dfa8fb075eeadc2 100644
+--- a/clang/test/Cilk/cilkfor-bounds.cpp
++++ b/clang/test/Cilk/cilkfor-bounds.cpp
+@@ -941,23 +941,25 @@ void down_ne_stride_flip(size_t start, size_t end, size_t stride) {
+ // CHECK: [[PFORCONDCLEANUP]]:
+ // CHECK-NEXT: sync within %[[SYNCREG]]
+
+-// CHECK: ![[LOOPMD]] = distinct !{![[LOOPMD]], ![[MUSTPROGRESS:[0-9]+]], ![[SPAWNSTRATEGY:[0-9]+]]}
++// CHECK: ![[LOOPMD]] = distinct !{![[LOOPMD]], ![[MUSTPROGRESS:[0-9]+]], ![[SPAWNSTRATEGY:[0-9]+]], ![[TARGET:[0-9]+]]}
++// CHECK: ![[MUSTPROGRESS]] = !{!"llvm.loop.mustprogress"}
+ // CHECK: ![[SPAWNSTRATEGY]] = !{!"tapir.loop.spawn.strategy", i32 1}
+-// CHECK: ![[LOOPMD2]] = distinct !{![[LOOPMD2]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD3]] = distinct !{![[LOOPMD3]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD4]] = distinct !{![[LOOPMD4]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD5]] = distinct !{![[LOOPMD5]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD6]] = distinct !{![[LOOPMD6]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD7]] = distinct !{![[LOOPMD7]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD8]] = distinct !{![[LOOPMD8]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD9]] = distinct !{![[LOOPMD9]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD10]] = distinct !{![[LOOPMD10]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD11]] = distinct !{![[LOOPMD11]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD12]] = distinct !{![[LOOPMD12]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD13]] = distinct !{![[LOOPMD13]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD14]] = distinct !{![[LOOPMD14]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD15]] = distinct !{![[LOOPMD15]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD16]] = distinct !{![[LOOPMD16]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD17]] = distinct !{![[LOOPMD17]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD18]] = distinct !{![[LOOPMD18]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
+-// CHECK: ![[LOOPMD19]] = distinct !{![[LOOPMD19]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]]}
++// CHECK: ![[TARGET]] = !{!"tapir.loop.target", i32 6}
++// CHECK: ![[LOOPMD2]] = distinct !{![[LOOPMD2]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD3]] = distinct !{![[LOOPMD3]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD4]] = distinct !{![[LOOPMD4]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD5]] = distinct !{![[LOOPMD5]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD6]] = distinct !{![[LOOPMD6]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD7]] = distinct !{![[LOOPMD7]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD8]] = distinct !{![[LOOPMD8]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD9]] = distinct !{![[LOOPMD9]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD10]] = distinct !{![[LOOPMD10]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD11]] = distinct !{![[LOOPMD11]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD12]] = distinct !{![[LOOPMD12]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD13]] = distinct !{![[LOOPMD13]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD14]] = distinct !{![[LOOPMD14]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD15]] = distinct !{![[LOOPMD15]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD16]] = distinct !{![[LOOPMD16]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD17]] = distinct !{![[LOOPMD17]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD18]] = distinct !{![[LOOPMD18]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
++// CHECK: ![[LOOPMD19]] = distinct !{![[LOOPMD19]], ![[MUSTPROGRESS]], ![[SPAWNSTRATEGY]], ![[TARGET]]}
+diff --git a/clang/test/Cilk/kitsune-loop-errors.cpp b/clang/test/Cilk/kitsune-loop-errors.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..f0ac96d1e525a4547e05ac125fea471dc3f072cd
+--- /dev/null
++++ b/clang/test/Cilk/kitsune-loop-errors.cpp
+@@ -0,0 +1,11 @@
++// RUN: %clang_cc1 -std=c++17 -fopencilk -fopencilk-kitsune -fsyntax-only -verify %s
++
++void invalid_targets(int *a, int n) {
++  [[tapir::target("unknown")]] // expected-error {{unknown tapir target}}
++  _Cilk_for (int i = 0; i < n; ++i)
++    a[i] = i;
++
++  [[tapir::deferred_sync]] // expected-error {{'deferred_sync' attribute only applies to 'parallel for' statements}}
++  for (int i = 0; i < n; ++i)
++    a[i] = i;
++}
+diff --git a/clang/test/Cilk/kitsune-loop-targets.cpp b/clang/test/Cilk/kitsune-loop-targets.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..777f73d139b91fc5b14bf304daf22fc2de6583dd
+--- /dev/null
++++ b/clang/test/Cilk/kitsune-loop-targets.cpp
+@@ -0,0 +1,22 @@
++// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fopencilk -fopencilk-kitsune -ftapir=none -emit-llvm %s -o - | FileCheck %s
++
++// The hybrid driver hands these loops to Kitsune before either is outlined.
++extern "C" void update(int *a, int n) {
++  _Cilk_for (int i = 0; i < n; ++i)
++    a[i] = i;
++  [[tapir::target("cuda"), tapir::grain_size(8), tapir::deferred_sync]]
++  _Cilk_for (int i = 0; i < n; ++i)
++    a[i] += 1;
++}
++
++// CHECK-LABEL: define {{.*}}void @update(
++// CHECK: detach within
++// CHECK: br i1 {{.*}}, !llvm.loop [[CPU:![0-9]+]]
++// CHECK: detach within
++// CHECK: br i1 {{.*}}, !llvm.loop [[GPU:![0-9]+]]
++// CHECK: [[CPU]] = distinct !{[[CPU]], [[PROGRESS:![0-9]+]], [[SPAWN:![0-9]+]], [[OPENCILK:![0-9]+]]}
++// CHECK: [[OPENCILK]] = !{!"tapir.loop.target", i32 6}
++// CHECK: [[GPU]] = distinct !{[[GPU]], [[PROGRESS]], [[SPAWN]], [[GRAIN:![0-9]+]], [[CUDA:![0-9]+]], [[DEFER:![0-9]+]]}
++// CHECK-DAG: [[GRAIN]] = !{!"tapir.loop.grainsize", i32 8}
++// CHECK-DAG: [[CUDA]] = !{!"tapir.loop.target", i32 2}
++// CHECK-DAG: [[DEFER]] = !{!"tapir.loop.deferred_sync", i1 true}
+diff --git a/clang/test/Cilk/tapirloopattrs.c b/clang/test/Cilk/tapirloopattrs.c
+index 3ff6018b8a8df1f1382caf01249273c84ede589c..09fc368a00e6487cfdd316af56cc35658aa2146e 100644
+--- a/clang/test/Cilk/tapirloopattrs.c
++++ b/clang/test/Cilk/tapirloopattrs.c
+@@ -26,15 +26,16 @@ void parfor_unroll_vec(double *restrict y, double *restrict x, double a, int n)
+ // CHECK: !llvm.loop [[LOOPID2:![0-9]+]]
+ // CHECK: !llvm.loop [[LOOPID3:![0-9]+]]
+
+-// CHECK: [[LOOPID1]] = distinct !{[[LOOPID1]], [[MUSTPROGRESS:![0-9]+]], [[TAPIR_SPAWN_STRATEGY:![0-9]+]], [[NOVEC:![0-9]+]]}
++// CHECK: [[LOOPID1]] = distinct !{[[LOOPID1]], [[MUSTPROGRESS:![0-9]+]], [[TAPIR_SPAWN_STRATEGY:![0-9]+]], [[TARGET:![0-9]+]], [[NOVEC:![0-9]+]]}
+ // CHECK: [[MUSTPROGRESS]] = !{!"llvm.loop.mustprogress"}
+ // CHECK: [[TAPIR_SPAWN_STRATEGY]] = !{!"tapir.loop.spawn.strategy", i32 1}
++// CHECK: [[TARGET]] = !{!"tapir.loop.target", i32 6}
+ // CHECK: [[NOVEC]] = !{!"llvm.loop.vectorize.width", i32 1}
+
+ // CHECK: [[LOOPID2]] = distinct !{[[LOOPID2]], [[MUSTPROGRESS]], [[VECATTRS:!.+]], [[VECFOLLOWALL1:![0-9]+]]}
+ // CHECK: [[VECFOLLOWALL1]] = !{!"llvm.loop.vectorize.followup_all", [[VECFOLLOW1:![0-9]+]]}
+ // CHECK: [[VECFOLLOW1]] = distinct !{[[VECFOLLOW1]], [[MUSTPROGRESS]], [[VECFOLLOWATTRS:!.+]]}
+
+-// CHECK: [[LOOPID3]] = distinct !{[[LOOPID3]], [[MUSTPROGRESS]], [[TAPIR_SPAWN_STRATEGY]], [[VECATTRS]], [[VECFOLLOWALL2:![0-9]+]]}
++// CHECK: [[LOOPID3]] = distinct !{[[LOOPID3]], [[MUSTPROGRESS]], [[TAPIR_SPAWN_STRATEGY]], [[TARGET]], [[VECATTRS]], [[VECFOLLOWALL2:![0-9]+]]}
+ // CHECK: [[VECFOLLOWALL2]] = !{!"llvm.loop.vectorize.followup_all", [[VECFOLLOW2:![0-9]+]]}
+-// CHECK: [[VECFOLLOW2]] = distinct !{[[VECFOLLOW2]], [[MUSTPROGRESS]], [[TAPIR_SPAWN_STRATEGY]], [[VECFOLLOWATTRS]]}
++// CHECK: [[VECFOLLOW2]] = distinct !{[[VECFOLLOW2]], [[MUSTPROGRESS]], [[TAPIR_SPAWN_STRATEGY]], [[TARGET]], [[VECFOLLOWATTRS]]}
