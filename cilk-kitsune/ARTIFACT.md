@@ -54,7 +54,8 @@ cmake --build build/kitsune --target check-kitsune check-kitrt
 ```
 
 On the RTX 5080, run the smoke script above with both NTT dependencies set.
-It checks hierarchical fused, unfused and naive-atomic GPU reducers, a
+It exercises separate compilation and a source-plus-object link. It checks
+hierarchical fused, unfused and naive-atomic GPU reducers, a
 4,097-element CPU and GPU prefix scan, and the CUDA launch in the nested and
 debug-info transpose fixtures. Intermediate frontend and lowered IR are saved
 in the run directory. The cache test can also run under [ThreadSanitizer](../kitsune/runtime/cuda/README.md#launch-cache-test).

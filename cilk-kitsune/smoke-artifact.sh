@@ -13,6 +13,14 @@ out=$(mktemp -d "$build/smoke/run.XXXXXX")
 echo "Smoke test outputs in $out"
 cd "$out"
 
+# The CMake launcher must accept a source and an already compiled object in
+# the same invocation. The main translation unit requires the object's symbol.
+echo 'int answer() { return 42; }' > answer.cpp
+echo 'int answer(); int main() { return answer() == 42 ? 0 : 1; }' > main.cpp
+"$here/ock++" -O2 -std=c++17 -c answer.cpp -o answer.o
+"$here/ock++" -O2 -std=c++17 main.cpp answer.o -o linked
+./linked
+
 "$OPENCILK_PATH/bin/clang++" -std=c++17 -O2 -fopencilk \
   "$here/test_reducer_smoke.cpp" -o cpu-reducer
 ./cpu-reducer
