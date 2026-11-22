@@ -44,6 +44,10 @@ set(KITRT kitrt)
 
 add_library(${KITRT} SHARED ${KITRT_SRCS})
 set_property(TARGET ${KITRT} PROPERTY INTERPROCEDURAL_OPTIMIZATION ON)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # Link our Clang-generated ThinLTO objects with the matching Kitsune LLD.
+  target_link_options(${KITRT} PRIVATE "--ld-path=${LLVM_BINARY_DIR}/bin/ld.lld")
+endif()
 
 if (KITRT_ENABLE_DEBUG)
   target_compile_definitions(${KITRT} -D_KITRT_DEBUG_)
