@@ -64,7 +64,8 @@
 // TODO: Finish exploration of map vs. CUDA call overheads.
 typedef kitrt::unordered_map<const void *, CUmodule> KitCudaModuleMap;
 static KitCudaModuleMap _kitcuda_module_map;
-static std::mutex _kitcuda_module_map_mutex;
+// Protects both the module and kernel maps.
+static std::mutex _kitcuda_module_cache_mutex;
 
 // *** EXPERIMENTAL: The runtime maintains a map from kernel names to
 // kernel functions.  This avoids searching a module repeatedly at
@@ -103,6 +104,35 @@ template <> struct hash<KitCudaLaunchParamKey> {
 typedef kitrt::unordered_map<KitCudaLaunchParamKey, int> KitCudaLaunchParamMap;
 static KitCudaLaunchParamMap _kitcuda_launch_param_map;
 static std::mutex _kitcuda_launch_param_map_mutex;
+
+namespace {
+
+// Callers must hold _kitcuda_module_cache_mutex.
+CUmodule get_or_load_module(const void *fat_bin) {
+  auto module = _kitcuda_module_map.find(fat_bin);
+  if (module != _kitcuda_module_map.end())
+    return module->second;
+
+  CUmodule cu_module;
+  CU_SAFE_CALL(cuModuleLoadData_p(&cu_module, fat_bin));
+  _kitcuda_module_map.emplace(fat_bin, cu_module);
+  return cu_module;
+}
+
+CUfunction get_or_load_kernel(const void *fat_bin, const char *kernel_name) {
+  std::lock_guard<std::mutex> lock(_kitcuda_module_cache_mutex);
+  auto kernel = _kitcuda_kernel_map.find(kernel_name);
+  if (kernel != _kitcuda_kernel_map.end())
+    return kernel->second;
+
+  CUmodule cu_module = get_or_load_module(fat_bin);
+  CUfunction cu_func;
+  CU_SAFE_CALL(cuModuleGetFunction_p(&cu_func, cu_module, kernel_name));
+  _kitcuda_kernel_map.emplace(kernel_name, cu_func);
+  return cu_func;
+}
+
+} // namespace
 
 extern "C" {
 
@@ -311,17 +341,12 @@ void __kitcuda_get_launch_params(size_t trip_count, CUfunction cu_func,
   // CU_SAFE_CALL(cuFuncSetCacheConfig_p(cu_func, CU_FUNC_CACHE_PREFER_L1));
 
   KitCudaLaunchParamKey key = {cu_func, trip_count};
-  KitCudaLaunchParamMap::iterator lpit = _kitcuda_launch_param_map.find(key);
-  if (lpit != _kitcuda_launch_param_map.end())
-    // use previously determined parameters.
-    threads_per_blk = lpit->second;
-  else {
-    _kitcuda_launch_param_map_mutex.lock();
-    KitCudaLaunchParamMap::iterator lpit = _kitcuda_launch_param_map.find(key);
-    if (lpit != _kitcuda_launch_param_map.end())
-      // use previously determined parameters.
-      threads_per_blk = lpit->second;
-    else {
+  {
+    std::lock_guard<std::mutex> lock(_kitcuda_launch_param_map_mutex);
+    auto params = _kitcuda_launch_param_map.find(key);
+    if (params != _kitcuda_launch_param_map.end()) {
+      threads_per_blk = params->second;
+    } else {
       if (_kitcuda_use_occupancy_calc)
         // EXPERIMENTAL: use an occupancy-based path to setting the launch
         // parameters.
@@ -329,9 +354,8 @@ void __kitcuda_get_launch_params(size_t trip_count, CUfunction cu_func,
                                         blks_per_grid, inst_mix);
       else
         threads_per_blk = _kitcuda_default_threads_per_blk;
-      _kitcuda_launch_param_map[key] = threads_per_blk;
+      _kitcuda_launch_param_map.emplace(key, threads_per_blk);
     }
-    _kitcuda_launch_param_map_mutex.unlock();
   }
 
   blks_per_grid = (trip_count + threads_per_blk - 1) / threads_per_blk;
@@ -356,33 +380,7 @@ void *__kitcuda_launch_kernel(const void *fat_bin, const char *kernel_name,
   // rules.
   __kitcuda_set_context();
 
-  CUfunction cu_func;
-  KitCudaKernelMap::iterator kernit = _kitcuda_kernel_map.find(kernel_name);
-  if (kernit == _kitcuda_kernel_map.end()) {
-    _kitcuda_module_map_mutex.lock();
-    KitCudaKernelMap::iterator kernit = _kitcuda_kernel_map.find(kernel_name);
-    if (kernit == _kitcuda_kernel_map.end()) {
-      // We have not yet encountered this kernel function...  Check to see
-      // if we already have a supporting module for the fat binary.
-      CUmodule cu_module;
-      KitCudaModuleMap::iterator modit = _kitcuda_module_map.find(fat_bin);
-      if (modit == _kitcuda_module_map.end()) {
-        // Create a supporting CUDA module and "register" the fat binary
-        // image in the map...
-        CU_SAFE_CALL(cuModuleLoadData_p(&cu_module, fat_bin));
-        _kitcuda_module_map[fat_bin] = cu_module;
-      } else
-        cu_module = modit->second;
-
-      // Look up the kernel function.
-      CU_SAFE_CALL(cuModuleGetFunction_p(&cu_func, cu_module, kernel_name));
-      _kitcuda_kernel_map[kernel_name] = cu_func;
-    } else {
-      cu_func = kernit->second;
-    }
-    _kitcuda_module_map_mutex.unlock();
-  } else
-    cu_func = kernit->second;
+  CUfunction cu_func = get_or_load_kernel(fat_bin, kernel_name);
 
   int blks_per_grid;
   if (threads_per_blk == 0)
@@ -434,27 +432,7 @@ void *__kitcuda_launch_kernel_nested(const void *fat_bin,
 
   __kitcuda_set_context();
 
-  CUfunction cu_func;
-  KitCudaKernelMap::iterator kernit = _kitcuda_kernel_map.find(kernel_name);
-  if (kernit == _kitcuda_kernel_map.end()) {
-    _kitcuda_module_map_mutex.lock();
-    KitCudaKernelMap::iterator kernit = _kitcuda_kernel_map.find(kernel_name);
-    if (kernit == _kitcuda_kernel_map.end()) {
-      CUmodule cu_module;
-      KitCudaModuleMap::iterator modit = _kitcuda_module_map.find(fat_bin);
-      if (modit == _kitcuda_module_map.end()) {
-        CU_SAFE_CALL(cuModuleLoadData_p(&cu_module, fat_bin));
-        _kitcuda_module_map[fat_bin] = cu_module;
-      } else
-        cu_module = modit->second;
-      CU_SAFE_CALL(cuModuleGetFunction_p(&cu_func, cu_module, kernel_name));
-      _kitcuda_kernel_map[kernel_name] = cu_func;
-    } else {
-      cu_func = kernit->second;
-    }
-    _kitcuda_module_map_mutex.unlock();
-  } else
-    cu_func = kernit->second;
+  CUfunction cu_func = get_or_load_kernel(fat_bin, kernel_name);
 
   // For nested kernels, blocks_per_grid = num_blocks (the outer loop count).
   // Use occupancy analysis to determine optimal threads_per_block,
@@ -526,33 +504,7 @@ void __kitcuda_alloc_scanner(const void *fat_bin, const char *kernel_name,
 
   __kitcuda_set_context();
 
-  CUfunction cu_func;
-  KitCudaKernelMap::iterator kernit = _kitcuda_kernel_map.find(kernel_name);
-  if (kernit == _kitcuda_kernel_map.end()) {
-    _kitcuda_module_map_mutex.lock();
-    KitCudaKernelMap::iterator kernit = _kitcuda_kernel_map.find(kernel_name);
-    if (kernit == _kitcuda_kernel_map.end()) {
-      // We have not yet encountered this kernel function...  Check to see
-      // if we already have a supporting module for the fat binary.
-      CUmodule cu_module;
-      KitCudaModuleMap::iterator modit = _kitcuda_module_map.find(fat_bin);
-      if (modit == _kitcuda_module_map.end()) {
-        // Create a supporting CUDA module and "register" the fat binary
-        // image in the map...
-        CU_SAFE_CALL(cuModuleLoadData_p(&cu_module, fat_bin));
-        _kitcuda_module_map[fat_bin] = cu_module;
-      } else
-        cu_module = modit->second;
-
-      // Look up the kernel function.
-      CU_SAFE_CALL(cuModuleGetFunction_p(&cu_func, cu_module, kernel_name));
-      _kitcuda_kernel_map[kernel_name] = cu_func;
-    } else {
-      cu_func = kernit->second;
-    }
-    _kitcuda_module_map_mutex.unlock();
-  } else
-    cu_func = kernit->second;
+  CUfunction cu_func = get_or_load_kernel(fat_bin, kernel_name);
 
   int blks_per_grid, threads_per_blk;
   __kitcuda_get_launch_params(trip_count, cu_func, threads_per_blk,
@@ -602,15 +554,10 @@ uint64_t __kitcuda_get_global_symbol(void *fat_bin, const char *sym_name) {
   __kitcuda_set_context();
 
   CUmodule cu_module;
-  _kitcuda_module_map_mutex.lock();
-  KitCudaModuleMap::iterator modit = _kitcuda_module_map.find(fat_bin);
-  if (modit == _kitcuda_module_map.end()) {
-    // Create a supporting CUDA module and "register" the fat binary
-    // image in the map...
-    CU_SAFE_CALL(cuModuleLoadData_p(&cu_module, fat_bin));
-    _kitcuda_module_map[fat_bin] = cu_module;
-  } else
-    cu_module = modit->second;
+  {
+    std::lock_guard<std::mutex> lock(_kitcuda_module_cache_mutex);
+    cu_module = get_or_load_module(fat_bin);
+  }
 
   // NOTE: The device pointer and size ('bytes') parameters for the
   // call to cuModuleGetGlobal are optional.  To simplify the compiler's
