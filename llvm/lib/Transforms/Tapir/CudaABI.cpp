@@ -3521,7 +3521,58 @@ void fixFencesAndAtomics(Module &KernelModule) {
 
 } // namespace
 
+// --- Kitsune user shared-memory support ------------------------------------
+// Lower calls to the marker function `void *__kitcuda_block_shared(i64 nbytes)`
+// (declared extern in user code) into per-block CUDA *static* shared memory.
+// Each call becomes an addrspace(3) global (identical mechanism to the reducer
+// block arrays) whose generic-cast pointer replaces the call, so ordinary
+// loads/stores through it lower to ld.shared/st.shared. Because this is static
+// shared memory, the launch's dynamic-shared-bytes argument stays 0 and the
+// occupancy calculator (cuOccupancyMaxPotentialBlockSize) automatically folds
+// the per-block usage into the chosen block size. `nbytes` must be a
+// compile-time constant.
+static void lowerBlockSharedCalls(Module &KM) {
+  Function *F = KM.getFunction("__kitcuda_block_shared");
+  if (!F)
+    return;
+  LLVMContext &Ctx = KM.getContext();
+  Type *Int8Ty = Type::getInt8Ty(Ctx);
+  SmallVector<CallInst *, 8> Calls;
+  for (User *U : F->users())
+    if (auto *CI = dyn_cast<CallInst>(U))
+      Calls.push_back(CI);
+  unsigned Idx = 0;
+  for (CallInst *CI : Calls) {
+    auto *SizeC = dyn_cast<ConstantInt>(CI->getArgOperand(0));
+    if (!SizeC) {
+      Ctx.emitError("kitsune: __kitcuda_block_shared size must be a "
+                    "compile-time constant");
+      continue;
+    }
+    uint64_t NBytes = SizeC->getZExtValue();
+    if (NBytes == 0)
+      NBytes = 1;
+    ArrayType *ArrTy = ArrayType::get(Int8Ty, NBytes);
+    GlobalVariable *GV = new GlobalVariable(
+        KM, ArrTy, /*isConstant=*/false, GlobalValue::InternalLinkage,
+        UndefValue::get(ArrTy), "__kitcuda_smem." + Twine(Idx++), nullptr,
+        GlobalVariable::NotThreadLocal, /*AddressSpace=*/3);
+    GV->setAlignment(Align(16));
+    IRBuilder<> B(CI);
+    Value *P3 = B.CreateInBoundsGEP(ArrTy, GV, {B.getInt32(0), B.getInt32(0)});
+    Value *Gen = B.CreateAddrSpaceCast(P3, CI->getType());
+    CI->replaceAllUsesWith(Gen);
+    CI->eraseFromParent();
+  }
+  LLVM_DEBUG(dbgs() << "cuabi: lowered " << Idx
+                    << " __kitcuda_block_shared call(s) to shared memory\n");
+}
+
 CudaABIOutputFile CudaABI::generatePTX() {
+  // Lower Kitsune user shared-memory requests to static addrspace(3) globals
+  // before PTX generation.
+  lowerBlockSharedCalls(KernelModule);
+
   // Link in the Bitcode file
   if (UseKitCudaRuntimeBC) {
     SMDiagnostic SMD;
