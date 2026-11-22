@@ -338,6 +338,8 @@ std::string PTXVersionFromCudaVersion() {
           .Case("12.3", "+ptx83")
           .Case("12.4", "+ptx83")
           .Case("12.5", "+ptx83")
+          .Case("12.6", "+ptx83")
+          .Case("12.7", "+ptx83")
           .Case("12.8", "+ptx83")
           .Case("12.9", "+ptx83")
           .Default("");
@@ -667,6 +669,28 @@ void CudaLoop::preProcessTapirLoop(TapirLoopInfo &TL, ValueToValueMapTy &VMap) {
 
   for (BasicBlock *BB : L.blocks())
     collect(*BB, UsedGlobalValues);
+
+  // Blocks of the loop body that never return to the loop (e.g. a trap or
+  // abort path ending in `unreachable`) are not loop blocks, but they are
+  // outlined into the kernel too. Scan everything reachable from the loop's
+  // exits other than its real exit block, or functions used only there
+  // (such as llvm.trap) are left referring to the host module.
+  {
+    SmallVector<BasicBlock *, 8> Work;
+    SmallPtrSet<BasicBlock *, 8> Seen;
+    SmallVector<BasicBlock *, 8> ExitBlocks;
+    L.getExitBlocks(ExitBlocks);
+    for (BasicBlock *EB : ExitBlocks)
+      if (EB != TL.getExitBlock() && Seen.insert(EB).second)
+        Work.push_back(EB);
+    while (!Work.empty()) {
+      BasicBlock *BB = Work.pop_back_val();
+      collect(*BB, UsedGlobalValues);
+      for (BasicBlock *S : successors(BB))
+        if (S != TL.getExitBlock() && !L.contains(S) && Seen.insert(S).second)
+          Work.push_back(S);
+    }
+  }
 
   // Clone global variables (TODO: and aliases).
   for (GlobalValue *V : UsedGlobalValues) {
@@ -1114,7 +1138,7 @@ void CudaLoop::fixReducersInKernel(Function *KernelF, Value *ThreadIdx,
     size_t Size;
     Function *IdFn;
     Function *MergeFn;
-    Type *Type;
+    llvm::Type *Type; // qualified: GCC rejects a member named like its type
     SmallSet<Instruction *, 8> HyperLookups;
     GlobalVariable *SharedPtr;
   };
@@ -1534,7 +1558,7 @@ void CudaLoop::fixScannersInKernel(Function *KernelF, Value *TripCount,
   auto *Int32Ty = Type::getInt32Ty(KernelF->getContext());
   struct ScannerInfo {
     size_t Size;
-    Type *Type;
+    llvm::Type *Type; // qualified for GCC (see ReductionVarInfo)
     CallInst *Call;
   };
   SmallVector<ScannerInfo, 8> Scanners;
