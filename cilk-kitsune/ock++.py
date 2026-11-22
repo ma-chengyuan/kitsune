@@ -400,9 +400,8 @@ class Invocation:
         # infinite recursion).
 
         input_files = (
-            [self.lowered_llvm_ir_output_file]
-            if self.input_file is not None
-            else self.object_files
+            ([self.lowered_llvm_ir_output_file] if self.input_file is not None else [])
+            + list(self.object_files)
         )
 
         kitrt_dir = f"{self.kitsune_path}/lib/clang/19/lib"
@@ -465,9 +464,8 @@ class Invocation:
         logging.info(f"linker args: {self.linker_args}")
         self.setup_temp_dir()
         if self.input_file is not None:
-            assert (
-                not self.object_files
-            ), "Input file and object files cannot both be specified"
+            if "-c" in self.linker_args and self.object_files:
+                raise ValueError("Object files cannot be linked with -c")
             self.check_input_file()
             self.generate_llvm_ir()
             self.run_kitsune_lowering()
