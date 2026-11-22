@@ -17,9 +17,12 @@ cd "$out"
   "$here/test_reducer_smoke.cpp" -o cpu-reducer
 ./cpu-reducer
 
-for mode in fused unfused; do
+for mode in fused unfused naive; do
   flags=()
-  if [[ $mode == unfused ]]; then flags+=(--cuabi-dont-fuse-reducers); fi
+  case "$mode" in
+    unfused) flags+=(--cuabi-dont-fuse-reducers) ;;
+    naive) flags+=(--cuabi-naive-atomics) ;;
+  esac
   "$here/ock++" -O2 -std=c++17 -fopencilk -DZERA_SMOKE_CUDA "--cuabi-arch=$arch" \
     "-save-temps=$out/$mode" "${flags[@]}" "$here/test_reducer_smoke.cpp" -o "$mode-reducer"
   grep -Eq 'call .*@__kitcuda_launch_kernel\(' "$mode/test_reducer_smoke.kitsune.ll"
@@ -27,13 +30,20 @@ for mode in fused unfused; do
 done
 
 "$here/ock++" -O2 -std=c++17 -fopencilk "--cuabi-arch=$arch" \
-  "$here/test_parsum_2d.cpp" -o nested
+  "-save-temps=$out/nested-ir" "$here/test_parsum_2d.cpp" -o nested
+grep -Eq 'call .*@__kitcuda_launch_kernel\(' nested-ir/test_parsum_2d.kitsune.ll
 ./nested 17 | tee nested.log
 grep -Fq 'Sum of first 17 numbers: 3648 vs 3648' nested.log
 
 "$here/ock++" -g -O2 -std=c++17 "--cuabi-arch=$arch" \
-  "$here/test_transpose_smoke.cpp" -o transpose
+  "-save-temps=$out/transpose-ir" "$here/test_transpose_smoke.cpp" -o transpose
+grep -Eq 'call .*@__kitcuda_launch_kernel\(' transpose-ir/test_transpose_smoke.kitsune.ll
 ./transpose
+
+"$here/ock++" -O2 -std=c++20 -fopencilk "--cuabi-arch=$arch" \
+  "-save-temps=$out/scan-ir" "$here/scan.cpp" -o scan
+grep -Eq 'call .*@__kitcuda_launch_kernel\(' scan-ir/scan.kitsune.ll
+./scan 4097
 
 resource=$("$KITSUNE_PATH/bin/clang++" -print-resource-dir)/lib
 cilklib="$resource/x86_64-unknown-linux-gnu"

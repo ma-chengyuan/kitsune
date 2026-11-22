@@ -287,7 +287,7 @@ struct range {
     }
 };
 
-__attribute__((noinline)) void test_cilk(size_t n) {
+__attribute__((noinline)) bool test_cilk(size_t n) {
     std::vector<range> v(n);
     cilk::scanner<decltype(v)> scanner(v);
     cilk_for (size_t i = 0; i < v.size(); ++i) {
@@ -298,13 +298,14 @@ __attribute__((noinline)) void test_cilk(size_t n) {
         if (v[i].start != 0 || v[i].end != i + 1) {
             fprintf(stderr, "Error: %zu: [%zu, %zu)\n", i, v[i].start,
                     v[i].end);
-            return;
+            return false;
         }
     }
     fprintf(stderr, "Cilk scan success!\n");
+    return true;
 }
 
-__attribute__((noinline)) void test_cuda(size_t n) {
+__attribute__((noinline)) bool test_cuda(size_t n) {
     std::vector<range> v(n);
     kitcuda::scanner<decltype(v)> scanner(v);
     [[tapir::target("cuda")]]
@@ -316,10 +317,11 @@ __attribute__((noinline)) void test_cuda(size_t n) {
         if (v[i].start != 0 || v[i].end != i + 1) {
             fprintf(stderr, "Error: %zu: [%zu, %zu)\n", i, v[i].start,
                     v[i].end);
-            return;
+            return false;
         }
     }
     fprintf(stderr, "CUDA scan success!\n");
+    return true;
 }
 
 auto main(int argc, char **argv) -> int {
@@ -328,7 +330,8 @@ auto main(int argc, char **argv) -> int {
         return 1;
     }
     size_t n = strtoull(argv[1], nullptr, 10);
-    cilk_scope test_cilk(n);
-    cilk_scope test_cuda(n);
-    return 0;
+    bool cpu_ok, gpu_ok;
+    cilk_scope { cpu_ok = test_cilk(n); }
+    cilk_scope { gpu_ok = test_cuda(n); }
+    return cpu_ok && gpu_ok ? 0 : 1;
 }

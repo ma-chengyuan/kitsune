@@ -37,3 +37,43 @@ cilk-kitsune/smoke-artifact.sh
 ```
 
 This also checks two BN254 transforms each at sizes `2^12` and `2^21`. The larger size selects the tiled implementation. The script checks the benchmark's reported comparison result because the benchmark can return zero on a mismatch.
+
+## Regression and parity checks
+
+Run the following from the repository root after building the artifact. The
+Clang and Tapir suites run on the host. The CUDA lowering tests use NVPTX and
+the configured CUDA toolkit to inspect host IR, device IR and PTX. The launch
+cache CTest uses a stub CUDA driver. These suites can run without a GPU.
+
+```sh
+cmake --build build/opencilk --target FileCheck
+build/opencilk/bin/llvm-lit -sv opencilk-project/clang/test/Cilk
+cmake --build build/kitsune --target kitsune-test-depends llc llvm-as llvm-dis
+build/kitsune/bin/llvm-lit -sv llvm/test/Transforms/Tapir
+cmake --build build/kitsune --target check-kitsune check-kitrt
+```
+
+On the RTX 5080, run the smoke script above with both NTT dependencies set.
+It checks hierarchical fused, unfused and naive-atomic GPU reducers, a
+4,097-element CPU and GPU prefix scan, and the CUDA launch in the nested and
+debug-info transpose fixtures. Intermediate frontend and lowered IR are saved
+in the run directory. The cache test can also run under [ThreadSanitizer](../kitsune/runtime/cuda/README.md#launch-cache-test).
+
+Build the same per-row Shockwave source (`60dd693`) in separate build
+directories with the reference and candidate compilers. Keep their runtime
+libraries separate when comparing changes to kitrt. On the idle RTX 5080 run
+
+```sh
+python3 cilk-kitsune/compare-shockwave.py \
+  /path/to/reference/cu-zksnark /path/to/candidate/cu-zksnark /path/to/new-results
+```
+
+The harness runs three warmups per build, then ten interleaved pairs at each
+Table XI size. It requires a verified proof and saves stdout, stderr, runtime
+resolution, digests, individual proof times, means and median paired ratios.
+A shift beyond ±5% in either the mean or the median paired ratio returns a
+review status. Inspect outliers and rerun the affected sizes in a fresh
+directory with e.g. `--sizes 18 19`. Use `--reference-library-path` and
+`--candidate-library-path` to override each executable's library search
+path for the comparison. Check the recorded library paths before attributing a
+timing difference to the compiler.
