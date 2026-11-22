@@ -28,6 +28,7 @@ configure_lit_site_cfg(
   "KITSUNE_SOURCE_DIR"
   "CURRENT_TOOLS_DIR"
   "CMAKE_LIBRARY_OUTPUT_DIRECTORY"
+  "CLANG_RESOURCE_INTDIR"
 )
 
 set(KITSUNE_TEST_PARAMS
@@ -45,6 +46,10 @@ list(APPEND KITSUNE_TEST_DEPS
 
 if(TARGET llvm-lto)
   list(APPEND KITSUNE_TEST_DEPS llvm-lto)
+endif()
+
+if(KITSUNE_CUDA_ENABLED)
+  list(APPEND KITSUNE_TEST_DEPS kitrt-copy-to-build-dir)
 endif()
 
 add_custom_target(kitsune-test-depends DEPENDS ${KITSUNE_TEST_DEPS})

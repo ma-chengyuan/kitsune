@@ -12,6 +12,7 @@ config.kitsune_lit_site_cfg = __file__
 config.kitsune_obj_root = path(r"@KITSUNE_BINARY_DIR@")
 config.kitsune_src_dir = path(r"@KITSUNE_SOURCE_DIR@")
 config.clang_lib_dir = path(r"@CMAKE_LIBRARY_OUTPUT_DIRECTORY@")
+config.clang_resource_dir = path(r"@CLANG_RESOURCE_INTDIR@")
 config.host_triple = "@LLVM_HOST_TRIPLE@"
 config.target_triple = "@LLVM_TARGET_TRIPLE@"
 config.host_cc = "@CMAKE_C_COMPILER@"
