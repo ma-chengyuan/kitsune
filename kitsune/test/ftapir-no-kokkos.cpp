@@ -6,4 +6,4 @@
 // RUN: not %kitxx -fsyntax-only -fkokkos %s 2>&1 | FileCheck %s
 // RUN: not %kitxx -fsyntax-only -fkokkos-no-init %s 2>&1 | FileCheck %s
 //
-// CHECK: Kokkos support was not enabled when kitsune was built
+// CHECK: error: kokkos support was not enabled when kitsune was built

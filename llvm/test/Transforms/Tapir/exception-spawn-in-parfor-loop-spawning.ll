@@ -617,7 +617,6 @@ declare void @llvm.assume(i1) #6
 declare i32 @llvm.tapir.loop.grainsize.i32(i32) #7
 
 ; CHECK-LABEL: define internal fastcc void @_Z15parfor_trycatchi.outline_pfor.cond48.ls1(
-; CHECK: %[[SYNCREG:.+]] = tail call token @llvm.syncregion.start()
 ; CHECK: %[[DACSYNCREG:.+]] = tail call token @llvm.syncregion.start()
 
 ; CHECK: detach within %[[DACSYNCREG]], label %[[DACSPAWN:.+]], label %[[DACCONT:.+]]
@@ -625,6 +624,9 @@ declare i32 @llvm.tapir.loop.grainsize.i32(i32) #7
 ; CHECK: [[DACSPAWN]]:
 ; CHECK: call fastcc void @_Z15parfor_trycatchi.outline_pfor.cond48.ls1(
 ; CHECK-NEXT: reattach within %[[DACSYNCREG]], label %[[DACCONT]]
+
+; CHECK: %[[LS_TF:.+]] = call token @llvm.taskframe.create()
+; CHECK-NEXT: %[[SYNCREG:.+]] = tail call token @llvm.syncregion.start()
 
 ; CHECK: pfor.body54.ls1:
 ; CHECK-NEXT: %[[TASKFRAME:.+]] = tail call token @llvm.taskframe.create()
@@ -656,12 +658,14 @@ declare i32 @llvm.tapir.loop.grainsize.i32(i32) #7
 ; CHECK: [[INVOKECONT]]:
 ; CHECK-NEXT: reattach within %[[SYNCREG]]
 
+; CHECK: call void @llvm.taskframe.end(token %[[LS_TF]])
+; CHECK-NEXT: sync within %[[DACSYNCREG]],
+
 ; CHECK: [[UNREACHABLE]]:
 ; CHECK-NEXT: unreachable
 
 
 ; CHECK-LABEL: define internal fastcc void @_Z15parfor_trycatchi.outline_pfor.cond.ls1(
-; CHECK: %[[SYNCREG:.+]] = tail call token @llvm.syncregion.start()
 ; CHECK: %[[DACSYNCREG:.+]] = tail call token @llvm.syncregion.start()
 
 ; CHECK: detach within %[[DACSYNCREG]], label %[[DACSPAWN:.+]], label %[[DACCONT:.+]]
@@ -669,6 +673,9 @@ declare i32 @llvm.tapir.loop.grainsize.i32(i32) #7
 ; CHECK: [[DACSPAWN]]:
 ; CHECK: call fastcc void @_Z15parfor_trycatchi.outline_pfor.cond.ls1(
 ; CHECK-NEXT: reattach within %[[DACSYNCREG]], label %[[DACCONT]]
+
+; CHECK: %[[LS_TF:.+]] = call token @llvm.taskframe.create()
+; CHECK-NEXT: %[[SYNCREG:.+]] = tail call token @llvm.syncregion.start()
 
 ; CHECK: pfor.body.ls1:
 ; CHECK-NEXT: %[[TASKFRAME:.+]] = tail call token @llvm.taskframe.create()
@@ -700,12 +707,14 @@ declare i32 @llvm.tapir.loop.grainsize.i32(i32) #7
 ; CHECK: [[INVOKECONT]]:
 ; CHECK-NEXT: reattach within %[[SYNCREG]]
 
+; CHECK: call void @llvm.taskframe.end(token %[[LS_TF]])
+; CHECK-NEXT: sync within %[[DACSYNCREG]],
+
 ; CHECK: [[UNREACHABLE]]:
 ; CHECK-NEXT: unreachable
 
 
 ; CHECK-LABEL: define internal fastcc void @_Z27parfor_trycatch_destructorsi.outline_pfor.cond70.ls1(
-; CHECK: %[[SYNCREG:.+]] = call token @llvm.syncregion.start()
 ; CHECK: %[[DACSYNCREG:.+]] = {{.*}}call token @llvm.syncregion.start()
 
 ; CHECK: detach within %[[DACSYNCREG]], label %[[DACSPAWN:.+]], label %[[DACCONT:.+]] unwind label %[[DACDU:.+]]
@@ -717,9 +726,13 @@ declare i32 @llvm.tapir.loop.grainsize.i32(i32) #7
 ; CHECK: [[DACINVOKECONT]]:
 ; CHECK-NEXT: reattach within %[[DACSYNCREG]], label %[[DACCONT]]
 
+; CHECK: %[[LS_TF:.+]] = call token @llvm.taskframe.create()
+; CHECK-NEXT: %[[B3:.+]] = alloca %class.Bar
+; CHECK-NEXT: %[[SYNCREG:.+]] = call token @llvm.syncregion.start()
+
 ; CHECK: pfor.body76.ls1:
 ; CHECK: call void @llvm.lifetime.start.p0(i64 1, ptr nonnull %[[B3PTR:.+]])
-; CHECK-NEXT: invoke void @_ZN3BarC1Ev(ptr nonnull %[[B3:.+]])
+; CHECK-NEXT: invoke void @_ZN3BarC1Ev(ptr nonnull %[[B3]])
 ; CHECK-NEXT: to label %[[B3CONSTRCONT:.+]] unwind label %lpad77.ls1
 
 ; CHECK: lpad77.ls1:
@@ -769,6 +782,9 @@ declare i32 @llvm.tapir.loop.grainsize.i32(i32) #7
 ; CHECK: [[INVOKECONT]]:
 ; CHECK-NEXT: reattach within %[[SYNCREG]], label %det.cont95.ls1
 
+; CHECK: call void @llvm.taskframe.end(token %[[LS_TF]])
+; CHECK-NEXT: sync within %[[DACSYNCREG]],
+
 ; CHECK: [[DACDU]]:
 ; CHECK-NEXT: landingpad
 ; CHECK-NEXT: cleanup
@@ -784,7 +800,6 @@ declare i32 @llvm.tapir.loop.grainsize.i32(i32) #7
 
 
 ; CHECK-LABEL: define internal fastcc void @_Z27parfor_trycatch_destructorsi.outline_pfor.cond.ls1(
-; CHECK: %[[SYNCREG:.+]] = call token @llvm.syncregion.start()
 ; CHECK: %[[DACSYNCREG:.+]] = {{.*}}call token @llvm.syncregion.start()
 
 ; CHECK: detach within %[[DACSYNCREG]], label %[[DACSPAWN:.+]], label %[[DACCONT:.+]] unwind label %[[DACDU:.+]]
@@ -796,9 +811,13 @@ declare i32 @llvm.tapir.loop.grainsize.i32(i32) #7
 ; CHECK: [[DACINVOKECONT]]:
 ; CHECK-NEXT: reattach within %[[DACSYNCREG]], label %[[DACCONT]]
 
+; CHECK: %[[LS_TF:.+]] = call token @llvm.taskframe.create()
+; CHECK-NEXT: %[[B2:.+]] = alloca %class.Bar
+; CHECK-NEXT: %[[SYNCREG:.+]] = call token @llvm.syncregion.start()
+
 ; CHECK: pfor.body.ls1:
 ; CHECK: call void @llvm.lifetime.start.p0(i64 1, ptr nonnull %[[B2PTR:.+]])
-; CHECK-NEXT: invoke void @_ZN3BarC1Ev(ptr nonnull %[[B2:.+]])
+; CHECK-NEXT: invoke void @_ZN3BarC1Ev(ptr nonnull %[[B2]])
 ; CHECK-NEXT: to label %[[B2CONSTRCONT:.+]] unwind label %lpad15.ls1
 
 ; CHECK: lpad15.ls1:
@@ -847,6 +866,9 @@ declare i32 @llvm.tapir.loop.grainsize.i32(i32) #7
 
 ; CHECK: [[INVOKECONT]]:
 ; CHECK-NEXT: reattach within %[[SYNCREG]], label %det.cont33.ls1
+
+; CHECK: call void @llvm.taskframe.end(token %[[LS_TF]])
+; CHECK-NEXT: sync within %[[DACSYNCREG]],
 
 ; CHECK: [[DACDU]]:
 ; CHECK-NEXT: landingpad
