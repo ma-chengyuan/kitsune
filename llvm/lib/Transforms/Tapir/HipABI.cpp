@@ -1199,7 +1199,9 @@ void HipLoop::postProcessOutline(TapirLoopInfo &TLI, TaskOutlineInfo &Out,
   case GK_NONE:
     break;
   default:
-    llvm_unreachable("Unhandled GPU!");
+    // Newer GPUs (e.g., gfx942, gfx10xx, gfx11xx): no explicit feature list
+    // is needed; the backend derives the features from "target-cpu" below.
+    break;
   }
   // TODO: Need to build target-specific string... and decide if we
   // really need this...
@@ -1211,7 +1213,16 @@ void HipLoop::postProcessOutline(TapirLoopInfo &TLI, TaskOutlineInfo &Out,
   KernelF->addFnAttr("amdgpu-waves-per-eu", AttrVal);
   KernelF->addFnAttr("target-features", target_feature_str.c_str());
   KernelF->addFnAttr("no-trapping-math", "true");
+  // The runtime looks kernels up by name, so they must be external. A kernel
+  // outlined from an internal function (e.g. any Rust function, or a C++
+  // `static` one) inherits internal linkage, which is also incompatible with
+  // protected visibility.
+  KernelF->setLinkage(GlobalValue::ExternalLinkage);
   KernelF->setVisibility(GlobalValue::VisibilityTypes::ProtectedVisibility);
+  // GPU kernels do not unwind; drop the host's personality function, which
+  // otherwise refers to the host module (e.g. rust_eh_personality).
+  if (KernelF->hasPersonalityFn())
+    KernelF->setPersonalityFn(nullptr);
   KernelF->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
   // Verify that the Thread ID corresponds to a valid iteration.  Because
   // Tapir loops use canonical induction variables, valid iterations range
@@ -1510,11 +1521,11 @@ HipABI::HipABI(Module &InputModule)
                                       VoidPtrTy,  // fat binary
                                       CharPtrTy); // symbol name
   KitHipMemcpySymbolToDevFn =
-      InputModule.getOrInsertFunction("__kithip_memcpy_symbol_to_device",
-                                      VoidTy,   // no return
-                                      Int32Ty,  // host pointer
-                                      Int64Ty,  // device pointer
-                                      Int64Ty); // number of bytes to copy
+      InputModule.getOrInsertFunction("__kithip_memcpy_sym_to_device",
+                                      VoidTy,    // no return
+                                      VoidPtrTy, // host pointer
+                                      VoidPtrTy, // device pointer
+                                      Int64Ty);  // number of bytes to copy
   KitHipSyncFn = M.getOrInsertFunction("__kithip_sync_thread_stream", VoidTy,
                                        VoidPtrTy); // no return, nor parameters
   // Build the details we need for the AMDGPU/HIP target.
@@ -1552,11 +1563,15 @@ HipABI::HipABI(Module &InputModule)
   // can result in a crash that would appear to be an incorrect/corrupt
   // fatbinary.   Calling the runtime _kitrt_hipEnableXnack() will
   // auto-set the environment variable (now done via the global ctor).
-  if (EnableXnack)
+  // Only request xnack/sramecc on GPUs that support them (e.g., RDNA parts
+  // have neither), so the code object matches the device.
+  unsigned ArchAttrs =
+      llvm::AMDGPU::getArchAttrAMDGCN(llvm::AMDGPU::parseArchAMDGCN(GPUArch));
+  if (EnableXnack && (ArchAttrs & llvm::AMDGPU::FEATURE_XNACK))
     Features += "+xnack,+xnack-support,";
 
-  if (EnableSRAMECC) // TODO: feature is arch specific. need to cross-check.
-    Features += ",+sramecc,";
+  if (EnableSRAMECC && (ArchAttrs & llvm::AMDGPU::FEATURE_SRAMECC))
+    Features += "+sramecc,";
 
   if (Use64ElementWavefront) // TODO: feature is arch specific. need to cross
                              // check.
@@ -1603,24 +1618,23 @@ std::unique_ptr<Module> &HipABI::getLibDeviceModule() {
     //
     // TODO: Add support for multiple architectures
     // in a single transform.
-    if (GPUArch == "gfx900")
-      ROCmBCFiles.push_back("oclc_isa_version_900.bc");
-    else if (GPUArch == "gfx902")
-      ROCmBCFiles.push_back("oclc_isa_version_902.bc");
-    else if (GPUArch == "gfx904")
-      ROCmBCFiles.push_back("oclc_isa_version_904.bc");
-    else if (GPUArch == "gfx906")
-      ROCmBCFiles.push_back("oclc_isa_version_906.bc");
-    else if (GPUArch == "gfx908")
-      ROCmBCFiles.push_back("oclc_isa_version_908.bc");
-    else if (GPUArch == "gfx90a")
-      ROCmBCFiles.push_back("oclc_isa_version_90a.bc");
-    else if (GPUArch == "gfx90c")
-      ROCmBCFiles.push_back("oclc_isa_version_90c.bc");
-    else {
-      errs() << "unsupported amdgpu archicture target: " << GPUArch << ".\n";
+    // ROCm ships one oclc_isa_version_<NNN>.bc per GPU (gfx942 ->
+    // oclc_isa_version_942.bc).
+    StringRef ArchRef(GPUArch);
+    if (!ArchRef.starts_with("gfx") ||
+        llvm::AMDGPU::parseArchAMDGCN(ArchRef) == llvm::AMDGPU::GK_NONE) {
+      errs() << "unsupported amdgpu architecture target: " << GPUArch << ".\n";
       report_fatal_error("fatal error!");
     }
+    std::string ISAFile =
+        "oclc_isa_version_" + ArchRef.drop_front(3).str() + ".bc";
+    if (!sys::fs::exists(std::string(KITSUNE_HIP_BITCODE_DIR) + ISAFile)) {
+      errs() << "hipabi: ROCm device library '" << ISAFile
+             << "' not found for " << GPUArch
+             << "; this ROCm version may not support that GPU.\n";
+      report_fatal_error("fatal error!");
+    }
+    ROCmBCFiles.push_back(ISAFile);
 
     if (ROCmABITarget == ROCm_ABI_V4)
       ROCmBCFiles.push_back("oclc_abi_version_400.bc");
@@ -1753,11 +1767,10 @@ void HipABI::finalizeLaunchCalls(Module &M, GlobalVariable *BundleBin) {
                   BundleBin, VoidPtrTy, "_hipbin.fatbin", CI);
               CI->setArgOperand(0, HipFatbin);
 
-              Instruction *NI = CI->getNextNonDebugInstruction();
-              // Unless someting else has monkeyed with our generated code
-              // NI should be the launch call.  We need the following code
-              // to go between the call instruction and the launch.
-              assert(NI && "unexpected null instruction!");
+              // Global variables must be copied to the device *before* the
+              // kernel is launched, so all of the code below is inserted
+              // immediately before the launch call (CI).
+              Instruction *NI = CI;
 
               // TODO: Do we want to sync naming conventions up between the
               // CUDA and HIP ABIs?  Might make the world a better place???
@@ -1771,8 +1784,9 @@ void HipABI::finalizeLaunchCalls(Module &M, GlobalVariable *BundleBin) {
                 Value *SymName =
                     tapir::createConstantStr(DevVarName, M, DevVarName);
                 Value *DevPtr =
-                    CallInst::Create(KitHipGetGlobalSymbolFn, {SymName, CI},
-                                     ".hipabi_devptr", NI);
+                    CallInst::Create(KitHipGetGlobalSymbolFn,
+                                     {HipFatbin, SymName}, ".hipabi_devptr",
+                                     NI);
                 Value *VGVPtr =
                     CastInst::CreatePointerCast(HostGV, VoidPtrTy, "", NI);
                 uint64_t NumBytes = DL.getTypeAllocSize(HostGV->getValueType());
@@ -1869,6 +1883,9 @@ HipABIOutputFile HipABI::createTargetObj(const StringRef &ObjFileName) {
   return ObjFile;
 }
 
+// Used only to locate the running compiler executable.
+static void hipabiExecutableAnchor() {}
+
 HipABIOutputFile HipABI::linkTargetObj(const HipABIOutputFile &ObjFile,
                                        const StringRef &LinkedObjFileName) {
   assert(ObjFile != nullptr && "null object file!");
@@ -1887,7 +1904,17 @@ HipABIOutputFile HipABI::linkTargetObj(const HipABIOutputFile &ObjFile,
   // FIXME: Since LLD is required, the project should be enabled by default
   // when building Kitsune and the binary added to the Kitsune configuration.
   // TODO: The lld invocation below is unix-specific...
-  auto LLD = sys::findProgramByName("lld");
+  // Prefer the lld installed next to this compiler: a different lld earlier
+  // on PATH (e.g., a stock OpenCilk install) may lack the AMDGPU target.
+  ErrorOr<std::string> LLD = std::make_error_code(std::errc::no_such_file_or_directory);
+  {
+    std::string Self = sys::fs::getMainExecutable(
+        nullptr, reinterpret_cast<void *>(&hipabiExecutableAnchor));
+    if (!Self.empty())
+      LLD = sys::findProgramByName("lld", {sys::path::parent_path(Self)});
+  }
+  if (!LLD)
+    LLD = sys::findProgramByName("lld");
   if ((EC = LLD.getError()))
     report_fatal_error("executable 'lld' not found! "
                        "check your path?");
