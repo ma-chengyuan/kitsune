@@ -3988,17 +3988,15 @@ CudaABI::getLoopOutlineProcessor(const TapirLoopInfo *TL) {
     return nullptr;
   }
 
-  // Skip loops nested inside another Tapir loop (detected by detach in parent header).
-  Loop *ParentLoop = TheLoop->getParentLoop();
-  while (ParentLoop) {
-    BasicBlock *ParentHeader = ParentLoop->getHeader();
-    for (Instruction &I : *ParentHeader) {
-      if (isa<DetachInst>(&I)) {
-        LLVM_DEBUG(dbgs() << "cuabi: skipping outline of nested tapir loop\n");
-        return nullptr;
-      }
-    }
-    ParentLoop = ParentLoop->getParentLoop();
+  // The nearest parallel parent owns this loop only if it becomes a GPU
+  // kernel. A CPU outer loop needs an outlined kernel to launch for each task.
+  for (Loop *Parent = TheLoop->getParentLoop(); Parent;
+       Parent = Parent->getParentLoop()) {
+    if (!isa<DetachInst>(Parent->getHeader()->getTerminator()))
+      continue;
+    if (TapirLoopHints(Parent).getLoopTarget() == unsigned(TapirTargetID::Cuda))
+      return nullptr;
+    break;
   }
 
   // Skip thread-parallel inner loops (they stay inside the parent kernel).

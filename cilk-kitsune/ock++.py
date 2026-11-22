@@ -293,6 +293,8 @@ class Invocation:
                 "-o",
                 self.llvm_ir_output_file,
                 *self.clang_args,
+                # Keep detach/sync and reducer lookups for Kitsune's lowering pass.
+                "-ftapir=none",
             ],
             f"OpenCilk compiler dumped IR to {self.llvm_ir_output_file}",
             # cwd=self.temp_dir,
