@@ -1,0 +1,154 @@
+diff --git a/icicle/include/icicle/math/modular_arithmetic.h b/icicle/include/icicle/math/modular_arithmetic.h
+index 411ee92..5220d14 100644
+--- a/icicle/include/icicle/math/modular_arithmetic.h
++++ b/icicle/include/icicle/math/modular_arithmetic.h
+@@ -3,8 +3,13 @@
+ // CUDA compiles both host and device math. CPU needs only host math.
+ #ifdef __CUDACC__
+   #include "gpu-utils/sharedmem.h"
+-  #include "cuda_math.h"
+ #endif // __CUDACC__
++// Under Kitsune (-ftapir=cuda) __CUDACC__ is not defined, but we still want the
++// fast cuda_math (PTX inline-asm) path for the outlined GPU kernels. Force the
++// include via ICICLE_FORCE_CUDA_MATH (driven by _tapir_cuda_target).
++#if defined(__CUDACC__) || defined(ICICLE_FORCE_CUDA_MATH)
++  #include "cuda_math.h"
++#endif
+ #include "icicle/math/host_math.h"
+ 
+ #include "icicle/errors.h"
+@@ -18,7 +23,7 @@
+ #include <string>
+ #include <cassert>
+ 
+-#ifdef __CUDA_ARCH__
++#if defined(__CUDA_ARCH__) || defined(ICICLE_FORCE_CUDA_MATH)
+ namespace icicle_math = cuda_math;
+ #else
+ namespace icicle_math = host_math;
+diff --git a/icicle/include/icicle/math/storage.h b/icicle/include/icicle/math/storage.h
+index 097db88..07a1e58 100644
+--- a/icicle/include/icicle/math/storage.h
++++ b/icicle/include/icicle/math/storage.h
+@@ -3,42 +3,39 @@
+ 
+ #define LIMBS_ALIGNMENT(x) ((x) % 4 == 0 ? 16 : ((x) % 2 == 0 ? 8 : 4))
+ 
+-template <unsigned LIMBS_COUNT>
+-struct
+-#ifdef __CUDA_ARCH__
+-  __align__(LIMBS_ALIGNMENT(LIMBS_COUNT))
++// Apply the natural vector alignment on BOTH device and host compiles. Under
++// nvcc (__CUDA_ARCH__) the original code used __align__; under clang-CUDA /
++// Kitsune (which never defines __CUDA_ARCH__ during device codegen) that guard
++// was skipped, leaving storage<8> only 8-byte aligned. That prevented LLVM's
++// load/store vectorizer from emitting 128-bit ld/st.shared.v2.u64, forcing
++// scalar 64-bit copies (~3.3x the L1 sector traffic). alignas is standard C++
++// and works in every path, so use it unconditionally.
++#ifdef ICICLE_NO_STORAGE_ALIGN
++#define ICICLE_STORAGE_ALIGN(x)
++#else
++#define ICICLE_STORAGE_ALIGN(x) alignas(LIMBS_ALIGNMENT(x))
+ #endif
+-    storage;
++
++template <unsigned LIMBS_COUNT>
++struct ICICLE_STORAGE_ALIGN(LIMBS_COUNT) storage;
+ 
+ // Specialization for LIMBS_COUNT == 1
+ template <>
+-struct
+-#ifdef __CUDA_ARCH__
+-  __align__(LIMBS_ALIGNMENT(1))
+-#endif
+-    storage<1> {
++struct ICICLE_STORAGE_ALIGN(1) storage<1> {
+   static constexpr unsigned LC = 1;
+   uint32_t limbs[1];
+ };
+ 
+ // Specialization for LIMBS_COUNT == 3
+ template <>
+-struct
+-#ifdef __CUDA_ARCH__
+-  __align__(LIMBS_ALIGNMENT(1))
+-#endif
+-    storage<3> {
++struct ICICLE_STORAGE_ALIGN(1) storage<3> {
+   static constexpr unsigned LC = 3;
+   uint32_t limbs[3];
+ };
+ 
+ // General template for LIMBS_COUNT > 1
+ template <unsigned LIMBS_COUNT>
+-struct
+-#ifdef __CUDA_ARCH__
+-  __align__(LIMBS_ALIGNMENT(LIMBS_COUNT))
+-#endif
+-    storage {
++struct ICICLE_STORAGE_ALIGN(LIMBS_COUNT) storage {
+   static_assert(LIMBS_COUNT % 2 == 0, "odd number of limbs is not supported\n");
+   static constexpr unsigned LC = LIMBS_COUNT;
+   union { // works only with even LIMBS_COUNT
+@@ -48,10 +45,6 @@ struct
+ };
+ 
+ template <unsigned OMEGAS_COUNT, unsigned LIMBS_COUNT>
+-struct
+-#ifdef __CUDA_ARCH__
+-  __align__(LIMBS_ALIGNMENT(LIMBS_COUNT))
+-#endif
+-    storage_array {
++struct ICICLE_STORAGE_ALIGN(LIMBS_COUNT) storage_array {
+   storage<LIMBS_COUNT> storages[OMEGAS_COUNT];
+-};
+\ No newline at end of file
++};
+diff --git a/icicle/include/icicle/utils/modifiers.h b/icicle/include/icicle/utils/modifiers.h
+index 2a11036..4e04495 100644
+--- a/icicle/include/icicle/utils/modifiers.h
++++ b/icicle/include/icicle/utils/modifiers.h
+@@ -8,7 +8,11 @@
+     #define UNROLL
+   #else
+     #define INLINE_MACRO __forceinline__
+-    #define UNROLL       #pragma unroll
++    #ifdef __clang__
++      #define UNROLL _Pragma("unroll")
++    #else
++      #define UNROLL       #pragma unroll
++    #endif
+   #endif
+ 
+   #define HOST_INLINE        __host__ INLINE_MACRO
+@@ -16,13 +20,29 @@
+   #define HOST_DEVICE        __host__ __device__
+   #define HOST_DEVICE_INLINE HOST_DEVICE INLINE_MACRO
+ #else // not NVCC
+-  #define UNROLL
++  #ifdef __clang__
++    #define UNROLL _Pragma("unroll")
++  #else
++    #define UNROLL
++  #endif
+   #define HOST_DEVICE
+   #define HOST_INLINE __attribute__((always_inline))
+   #define DEVICE_INLINE
+   #define HOST_DEVICE_INLINE HOST_INLINE
+   #define __host__
+   #define __device__
++  // Kitsune (-ftapir=cuda) compiles a single non-NVCC pass but still needs the
++  // cuda_math / ptx.h device helpers to carry their inline-asm bodies into the
++  // outlined GPU kernels. Those headers use __forceinline__ directly, so define
++  // it here; it is unused by host-only builds that never include cuda_math.h.
++  #ifndef __forceinline__
++    #define __forceinline__ inline __attribute__((always_inline))
++  #endif
++  // cuda_math.h uses __align__ on local scratch arrays (ungated by __CUDA_ARCH__).
++  // Map it to the portable aligned attribute so the fast path compiles here.
++  #ifndef __align__
++    #define __align__(n) __attribute__((aligned(n)))
++  #endif
+ #endif
+ 
+ #if defined(_MSC_VER)
