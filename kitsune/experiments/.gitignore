@@ -6,3 +6,4 @@
 *.tapir
 *.ptx
 *.log
+/inc/config.mk
