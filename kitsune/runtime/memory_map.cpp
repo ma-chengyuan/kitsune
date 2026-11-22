@@ -54,6 +54,7 @@
 #include <cassert>
 #include <cstdio>
 #include <mutex>
+#include <new>
 
 #include <boost/intrusive/set.hpp>
 
@@ -110,8 +111,10 @@ static KitRTAllocMapEntry *__kitrt_memory_map_lookup(void *addr) {
 
 void __kitrt_register_mem_alloc(void *addr, size_t size) {
   assert(addr != nullptr && "unexpected null pointer!");
-  KitRTAllocMapEntry *entry = reinterpret_cast<KitRTAllocMapEntry *>(
-      malloc(sizeof(KitRTAllocMapEntry)));
+  // Construct the entry in place so its intrusive set hook starts unlinked,
+  // as Boost.Intrusive requires before insertion.
+  KitRTAllocMapEntry *entry =
+      new (malloc(sizeof(KitRTAllocMapEntry))) KitRTAllocMapEntry();
   entry->base = addr;
   entry->size = size;
   entry->prefetched = false;
@@ -254,6 +257,7 @@ void __kitrt_unregister_mem_alloc(void *addr) {
   KitRTAllocMapEntry *entry = __kitrt_memory_map_lookup(addr);
   if (entry != nullptr) {
     _kitrt_alloc_map.erase(*entry);
+    entry->~KitRTAllocMapEntry();
     free(entry);
   }
   _kitrt_alloc_map_mutex.unlock();
