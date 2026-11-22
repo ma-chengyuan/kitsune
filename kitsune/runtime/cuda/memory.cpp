@@ -132,8 +132,8 @@ __kitcuda_mem_alloc_managed_aligned(size_t size, size_t alignment) {
     size_t to_align =
         ((tls_data.cur_block + alignment - 1) & ~(alignment - 1)) -
         tls_data.cur_block;
-    size += to_align;
-    if (size > tls_data.capacity_remaining) {
+    if (to_align > tls_data.capacity_remaining ||
+        size > tls_data.capacity_remaining - to_align) {
       _kitcuda_chunk_fragmentation += tls_data.capacity_remaining;
       tls_data.cur_block = reinterpret_cast<uintptr_t>(
           __kitcuda_mem_alloc_managed_internal(_kitcuda_big_block_threshold));
@@ -152,8 +152,9 @@ __kitcuda_mem_alloc_managed_aligned(size_t size, size_t alignment) {
       to_align = 0;
     }
     ret = reinterpret_cast<void *>(tls_data.cur_block + to_align);
-    tls_data.cur_block += size;
-    tls_data.capacity_remaining -= size;
+    // Padding precedes the user pointer and is not part of its prefetch range.
+    tls_data.cur_block += to_align + size;
+    tls_data.capacity_remaining -= to_align + size;
     _kitcuda_mem_alloc_mutex.lock();
   } else {
     ret = reinterpret_cast<void *>(__kitcuda_mem_alloc_managed_internal(size));

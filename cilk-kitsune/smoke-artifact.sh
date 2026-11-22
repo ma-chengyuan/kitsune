@@ -31,11 +31,19 @@ done
 ./nested 17 | tee nested.log
 grep -Fq 'Sum of first 17 numbers: 3648 vs 3648' nested.log
 
+"$here/ock++" -g -O2 -std=c++17 "--cuabi-arch=$arch" \
+  "$here/test_transpose_smoke.cpp" -o transpose
+./transpose
+
+resource=$("$KITSUNE_PATH/bin/clang++" -print-resource-dir)/lib
+cilklib="$resource/x86_64-unknown-linux-gnu"
+"$OPENCILK_PATH/bin/clang++" "$here/test_prefetch_smoke.cpp" -o prefetch \
+  -L"$resource" -L"$cilklib" "-Wl,-rpath,$resource:$cilklib" -lkitrt -lopencilk
+KITCUDA_BIG_BLOCK_THRESHOLD=4096 ./prefetch
+
 if [[ -n ${ZERA_BENCHMARKS:-} || -n ${ICICLE_INCLUDE:-} ]]; then
   : "${ZERA_BENCHMARKS:?Set to the absolute path of zera-paper-benchmarks}"
   : "${ICICLE_INCLUDE:?Set to the absolute path of the patched Icicle include directory}"
-  resource=$("$KITSUNE_PATH/bin/clang++" -print-resource-dir)/lib
-  cilklib="$resource/x86_64-unknown-linux-gnu"
   export LD_LIBRARY_PATH="$resource:$cilklib:$CUDA_HOME/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   "$KITSUNE_PATH/bin/clang++" -std=c++20 -O2 -ftapir=cuda -mllvm "-cuabi-arch=$arch" \
     -mllvm "-kitcuda-runtime-bc-path=$resource/kitcuda.bc" -mllvm -cuabi-embed-ptx \

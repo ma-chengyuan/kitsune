@@ -2418,26 +2418,21 @@ void llvm::TapirLoopHints::writeHintsToClonedMetadata(ArrayRef<Hint> HintTypes,
   if (HintTypes.size() == 0)
     return;
 
-  LLVMContext &Context =
-      cast<BasicBlock>(VMap[TheLoop->getHeader()])->getContext();
-  SmallVector<Metadata *, 4> MDs;
-
-  // Reserve first location for self reference to the LoopID metadata node.
-  TempMDTuple TempNode = MDNode::getTemporary(Context, std::nullopt);
-  MDs.push_back(TempNode.get());
-
-  // If the loop already has metadata, then ignore the existing operands.
-  MDNode *OrigLoopID = TheLoop->getLoopID();
-  if (!OrigLoopID)
+  BasicBlock *ClonedLatch = cast<BasicBlock>(VMap[TheLoop->getLoopLatch()]);
+  Instruction *Term = ClonedLatch->getTerminator();
+  // Target-specific outlining may already have remapped debug locations or
+  // removed hints. Preserve the metadata actually attached to the clone.
+  MDNode *LoopID = Term->getMetadata(LLVMContext::MD_loop);
+  if (!LoopID)
     return;
 
-  if (MDNode *LoopID = dyn_cast_or_null<MDNode>(VMap.MD()[OrigLoopID])) {
-    for (unsigned i = 1, ie = LoopID->getNumOperands(); i < ie; ++i) {
-      MDNode *Node = cast<MDNode>(LoopID->getOperand(i));
-      // If node in update list, ignore old value.
-      if (!matchesHintMetadataName(Node, HintTypes))
-        MDs.push_back(Node);
-    }
+  LLVMContext &Context = Term->getContext();
+  SmallVector<Metadata *, 4> MDs = {nullptr};
+  for (unsigned i = 1, e = LoopID->getNumOperands(); i != e; ++i) {
+    Metadata *MD = LoopID->getOperand(i);
+    auto *Node = dyn_cast_or_null<MDNode>(MD);
+    if (!Node || !matchesHintMetadataName(Node, HintTypes))
+      MDs.push_back(MD);
   }
 
   // Now, add the missing hints.
@@ -2445,14 +2440,9 @@ void llvm::TapirLoopHints::writeHintsToClonedMetadata(ArrayRef<Hint> HintTypes,
     MDs.push_back(createHintMetadata(Twine(Prefix(), H.Name).str(), H.Value));
 
   // Replace current metadata node with new one.
-  MDNode *NewLoopID = MDNode::get(Context, MDs);
-  // Set operand 0 to refer to the loop id itself.
+  MDNode *NewLoopID = MDNode::getDistinct(Context, MDs);
   NewLoopID->replaceOperandWith(0, NewLoopID);
-
-  // Set the metadata on the terminator of the cloned loop's latch.
-  BasicBlock *ClonedLatch = cast<BasicBlock>(VMap[TheLoop->getLoopLatch()]);
-  assert(ClonedLatch && "Cloned Tapir loop does not have a single latch.");
-  ClonedLatch->getTerminator()->setMetadata(LLVMContext::MD_loop, NewLoopID);
+  Term->setMetadata(LLVMContext::MD_loop, NewLoopID);
 }
 
 /// Sets current hints into loop metadata, keeping other values intact.
