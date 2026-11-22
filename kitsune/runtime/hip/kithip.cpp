@@ -288,9 +288,12 @@ void __kithip_destroy() {
   if (not _kithip_initialized)
     return;
 
-  __kithip_destroy_thread_streams();
-  __kitrt_destroy_memory_map(__kithip_mem_destroy);
-  HIP_SAFE_CALL(hipDeviceReset_p());
+  // This runs from an exit handler, when the HIP runtime may already have
+  // been torn down: hipStreamDestroy segfaulted here with ROCm 7.14 on MI100
+  // and MI210. The process is exiting, so skip the HIP calls and let the OS
+  // reclaim the resources; upstream Kitsune likewise stopped calling
+  // hipDeviceReset here.
+  __kitrt_destroy_memory_map([](void *) {});
   _kithip_initialized = false;
 }
 

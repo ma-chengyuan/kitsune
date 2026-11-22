@@ -121,8 +121,17 @@ static KitHipLaunchParamMap _kithip_launch_param_map;
 
 namespace {
 
-// we "borrow" this from cuda... 
-extern int next_lowest_factor(int n, int m);
+// Same helper as in cuda/launching.cpp, whose copy is file-local.
+static int kithip_next_lowest_factor(int n, int m) {
+  if (n > m) {
+    for (int i = n - 1; i != 0; i--) {
+      int r = i % m;
+      if (r == 0)
+        return i;
+    }
+  }
+  return m;
+}
 
 /**
  * Get the launch parameters for a given kernel and trip count based
@@ -200,7 +209,7 @@ void __kithip_get_occ_launch_params(size_t trip_count, hipFunction_t kfunc,
                     &warp_size, hipDeviceAttributeWarpSize, 
                     _kithip_device_id));
       while (block_count < num_multiprocs && threads_per_blk > warp_size) {
-        threads_per_blk = next_lowest_factor(threads_per_blk, warp_size);
+        threads_per_blk = kithip_next_lowest_factor(threads_per_blk, warp_size);
         block_count = (trip_count + threads_per_blk - 1) / threads_per_blk;
         sm_load = ((float)block_count / num_multiprocs) * 100.0;
       }
@@ -330,6 +339,8 @@ void *__kithip_get_global_symbol(void *fat_bin, const char *sym_name) {
     _kithip_module_map[fat_bin] = hip_module;
   } else
     hip_module = modit->second;
+  // Done with the module map (kernel launches take the same lock).
+  _kithip_module_map_mutex.unlock();
 
   // NOTE: The device pointer and size ('bytes') parameters for the
   // call to cuModuleGetGlobal are optional.  To simplify the compiler's
