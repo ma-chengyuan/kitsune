@@ -2,7 +2,7 @@
 
 The repository root builds Kitsune. The `opencilk-project/` subtree builds the OpenCilk frontend and CPU runtime. The Shockwave path uses `cilk-kitsune/ock++` to pass Tapir IR between them. The tiled NTT uses Kitsune Clang directly with `-ftapir=cuda`.
 
-Kitsune leaves the preferred location of shared CUDA allocations unset. CPU and GPU phases can use the same allocation throughout its lifetime. When the compiler requests a prefetch, the runtime uses `cuMemPrefetchAsync` to move the requested range toward the next processor. The prefetch smoke test checks both destinations and queries CUDA's preferred-location attribute after each request.
+Kitsune leaves the preferred location of shared CUDA allocations unset. It initially requests a GPU mapping for indirect access. When a GPU kernel directly uses a buffer with a dedicated allocation, the runtime clears its mapping hint and prefetches the buffer to the GPU. This lets CUDA migrate pages on later accesses by either processor. Small objects that share pool pages retain the mapping because neighboring objects can be in use on the CPU. The prefetch smoke test checks both allocation paths using CUDA's range attributes.
 
 ## Source revisions
 

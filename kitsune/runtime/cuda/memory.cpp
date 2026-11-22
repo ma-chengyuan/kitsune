@@ -339,6 +339,15 @@ void *__kitcuda_mem_gpu_prefetch(void *vp, void *opaque_stream) {
       __kitcuda_set_context();
       vp = base;
 
+      // For a dedicated allocation, the explicit prefetch identifies GPU
+      // use. Retire the allocator's accessed-by mapping so later GPU faults
+      // can migrate pages back after CPU accesses. Pooled objects share
+      // pages with neighbors that may still benefit from the mapping.
+      if (size >= _kitcuda_big_block_threshold)
+        CU_SAFE_CALL(cuMemAdvise_p((CUdeviceptr)vp, size,
+                                   CU_MEM_ADVISE_UNSET_ACCESSED_BY,
+                                   _kitcuda_device));
+
       // Issue a prefetch request on the provided stream.  If the given
       // stream is null, create a new stream and return it. Once issued
       // go ahead and mark the memory as having been prefetched.  This
