@@ -11,11 +11,13 @@
 #include "LinkInModulesPass.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/Diagnostic.h"
+#include "clang/Basic/DiagnosticDriver.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/TargetOptions.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
 #include "clang/Frontend/Utils.h"
 #include "clang/Lex/HeaderSearchOptions.h"
+#include "kitsune/Config/config.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -29,6 +31,7 @@
 #include "llvm/CodeGen/RegAllocRegistry.h"
 #include "llvm/CodeGen/SchedulerRegistry.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/Frontend/Driver/CodeGenOptions.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfo.h"
@@ -87,11 +90,13 @@
 #include "llvm/Transforms/Scalar/EarlyCSE.h"
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Scalar/JumpThreading.h"
+#include "llvm/Transforms/Tapir/MemOpsReplacement.h"
 #include "llvm/Transforms/Tapir/TapirToTarget.h"
 #include "llvm/Transforms/Utils/Debugify.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <memory>
 #include <optional>
+#include <utility>
 using namespace clang;
 using namespace llvm;
 
@@ -294,11 +299,13 @@ static bool asanUseGlobalsGC(const Triple &T, const CodeGenOptions &CGOpts) {
 
 static std::unique_ptr<TargetLibraryInfoImpl>
 createTLII(llvm::Triple &TargetTriple, const CodeGenOptions &CodeGenOpts,
-           const LangOptions &LangOpts) {
+           const LangOptions &LangOpts,
+           std::optional<TapirTargetID> TapirTarget = std::nullopt) {
   std::unique_ptr<TargetLibraryInfoImpl> TLII(
       llvm::driver::createTLII(TargetTriple, CodeGenOpts.getVecLib()));
 
-  TLII->setTapirTarget(LangOpts.KitsuneOpts.getTapirTargetOrInvalid());
+  TLII->setTapirTarget(
+      TapirTarget.value_or(LangOpts.KitsuneOpts.getTapirTargetOrInvalid()));
   TLII->setTapirTargetOptions(
       std::make_unique<OpenCilkABIOptions>(CodeGenOpts.OpenCilkABIBitcodeFile));
   TLII->addTapirTargetLibraryFunctions();
@@ -876,10 +883,37 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
   PTO.CallGraphProfile = !CodeGenOpts.DisableIntegratedAS;
   PTO.UnifiedLTO = CodeGenOpts.UnifiedLTO;
 
-  LoopAnalysisManager LAM;
-  FunctionAnalysisManager FAM;
-  CGSCCAnalysisManager CGAM;
-  ModuleAnalysisManager MAM;
+  const PipelineTuningOptions HostPTO = PTO;
+  if (CodeGenOpts.Zera) {
+    // Preserve GPU loops until loop spawning can outline them for the device.
+    PTO.LoopUnrolling = false;
+    PTO.LoopInterleaving = false;
+    PTO.LoopVectorization = false;
+    PTO.SLPVectorization = false;
+  }
+
+  struct PipelineAnalyses {
+    LoopAnalysisManager LAM;
+    FunctionAnalysisManager FAM;
+    CGSCCAnalysisManager CGAM;
+    ModuleAnalysisManager MAM;
+
+    void registerWith(PassBuilder &PB, const TargetLibraryInfoImpl &TLII) {
+      FAM.registerPass([&] { return TargetLibraryAnalysis(TLII); });
+      PB.registerModuleAnalyses(MAM);
+      PB.registerCGSCCAnalyses(CGAM);
+      PB.registerFunctionAnalyses(FAM);
+      PB.registerLoopAnalyses(LAM);
+      PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+    }
+
+    void clear() {
+      MAM.clear();
+      CGAM.clear();
+      FAM.clear();
+      LAM.clear();
+    }
+  } Analyses;
 
   bool DebugPassStructure = CodeGenOpts.DebugPass == "Structure";
   PassInstrumentationCallbacks PIC;
@@ -890,7 +924,7 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
       TheModule->getContext(),
       (CodeGenOpts.DebugPassManager || DebugPassStructure),
       CodeGenOpts.VerifyEach, PrintPassOpts);
-  SI.registerCallbacks(PIC, &MAM);
+  SI.registerCallbacks(PIC, &Analyses.MAM);
   PassBuilder PB(TM.get(), PTO, PGOOpt, &PIC);
 
   // Handle the assignment tracking feature options.
@@ -928,7 +962,7 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
     if (!CodeGenOpts.DIBugsReportFilePath.empty())
       Debugify.setOrigDIVerifyBugsReportFilePath(
           CodeGenOpts.DIBugsReportFilePath);
-    Debugify.registerCallbacks(PIC, MAM);
+    Debugify.registerCallbacks(PIC, Analyses.MAM);
   }
   // Attempt to load pass plugins and register their callbacks with PB.
   for (auto &PluginFN : CodeGenOpts.PassPlugins) {
@@ -946,19 +980,14 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
   get##Ext##PluginInfo().RegisterPassBuilderCallbacks(PB);
 #include "llvm/Support/Extension.def"
 
-  // Register the target library analysis directly and give it a customized
-  // preset TLI.
-  std::unique_ptr<TargetLibraryInfoImpl> TLII(
-      createTLII(TargetTriple, CodeGenOpts, LangOpts));
-  FAM.registerPass([&] { return TargetLibraryAnalysis(*TLII); });
+  // Preparation and host optimization should use the ordinary target library.
+  auto TLII = createTLII(TargetTriple, CodeGenOpts, LangOpts,
+                         CodeGenOpts.Zera ? std::optional(TapirTargetID::None)
+                                          : std::nullopt);
+  Analyses.registerWith(PB, *TLII);
 
-  // Register all the basic analyses with the managers.
-  PB.registerModuleAnalyses(MAM);
-  PB.registerCGSCCAnalyses(CGAM);
-  PB.registerFunctionAnalyses(FAM);
-  PB.registerLoopAnalyses(LAM);
-  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
-
+  ModulePassManager ZeraPreparation;
+  ModulePassManager ZeraLowering;
   ModulePassManager MPM;
   // Add a verifier pass, before any other passes, to catch CodeGen issues.
   if (CodeGenOpts.VerifyModule)
@@ -1052,7 +1081,33 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
             MPM.addPass(PB.buildPostCilkInstrumentationPipeline(Level));
           });
 
-    if (CodeGenOpts.FatLTO) {
+    if (CodeGenOpts.Zera) {
+      MPM.addPass(PB.buildPerModuleDefaultPipeline(Level));
+      if (CodeGenOpts.VerifyModule)
+        MPM.addPass(VerifierPass());
+      ZeraPreparation = std::exchange(MPM, ModulePassManager());
+
+      // Outlining compiles CUDA kernels and leaves the remaining Tapir tasks
+      // for the OpenCilk ABI. Use the Tapir lowering pipeline's default
+      // tuning, as in the standalone opt invocation.
+      CudaABIOptions CudaOptions{CodeGenOpts.KitCudaABIBitcodeFile,
+                                 CodeGenOpts.KitCudaLibDeviceFile,
+                                 CodeGenOpts.KitCudaPtxasPath,
+                                 CodeGenOpts.KitCudaFatbinaryPath,
+                                 /*EmbedPTX=*/true};
+      PassBuilder LoweringPB(TM.get());
+      ZeraLowering.addPass(LoweringPB.buildTapirLoweringPipeline(
+          Level, ThinOrFullLTOPhase::None, &CudaOptions));
+      ZeraLowering.addPass(
+          createModuleToFunctionPassAdaptor(MemOpsReplacementPass()));
+      if (CodeGenOpts.VerifyModule)
+        ZeraLowering.addPass(VerifierPass());
+
+      // Optimize the lowered host code with the requested loop tuning.
+      // The first pipeline has already inserted frontend instrumentation.
+      PassBuilder HostPB(TM.get(), HostPTO);
+      MPM.addPass(HostPB.buildPerModuleDefaultPipeline(Level));
+    } else if (CodeGenOpts.FatLTO) {
       MPM.addPass(PB.buildFatLTODefaultPipeline(
           Level, PrepareForThinLTO,
           PrepareForThinLTO || shouldEmitRegularLTOSummary()));
@@ -1127,10 +1182,17 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
   // Print a textual, '-passes=' compatible, representation of pipeline if
   // requested.
   if (PrintPipelinePasses) {
-    MPM.printPipeline(outs(), [&PIC](StringRef ClassName) {
+    auto MapClassName = [&PIC](StringRef ClassName) {
       auto PassName = PIC.getPassNameForClassName(ClassName);
       return PassName.empty() ? ClassName : PassName;
-    });
+    };
+    if (!ZeraPreparation.isEmpty()) {
+      ZeraPreparation.printPipeline(outs(), MapClassName);
+      outs() << ',';
+      ZeraLowering.printPipeline(outs(), MapClassName);
+      outs() << ',';
+    }
+    MPM.printPipeline(outs(), MapClassName);
     outs() << "\n";
     return;
   }
@@ -1143,7 +1205,28 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
   {
     PrettyStackTraceString CrashInfo("Optimizer");
     llvm::TimeTraceScope TimeScope("Optimizer");
-    MPM.run(*TheModule, MAM);
+    if (!ZeraPreparation.isEmpty()) {
+      ZeraPreparation.run(*TheModule, Analyses.MAM);
+      Analyses.clear();
+
+      // Lowering observes the OpenCilk library ABI and runs independently of
+      // analyses computed before device outlining.
+      PipelineAnalyses LoweringAnalyses;
+      PassInstrumentationCallbacks LoweringPIC;
+      StandardInstrumentations LoweringSI(
+          TheModule->getContext(),
+          CodeGenOpts.DebugPassManager || DebugPassStructure,
+          CodeGenOpts.VerifyEach, PrintPassOpts);
+      LoweringSI.registerCallbacks(LoweringPIC, &LoweringAnalyses.MAM);
+      if (CodeGenOpts.EnableDIPreservationVerify)
+        Debugify.registerCallbacks(LoweringPIC, LoweringAnalyses.MAM);
+      PassBuilder LoweringPB(TM.get(), PipelineTuningOptions(), std::nullopt,
+                             &LoweringPIC);
+      auto LoweringTLII = createTLII(TargetTriple, CodeGenOpts, LangOpts);
+      LoweringAnalyses.registerWith(LoweringPB, *LoweringTLII);
+      ZeraLowering.run(*TheModule, LoweringAnalyses.MAM);
+    }
+    MPM.run(*TheModule, Analyses.MAM);
   }
 }
 
@@ -1193,6 +1276,21 @@ void EmitAssemblyHelper::RunCodegenPipeline(
 void EmitAssemblyHelper::EmitAssembly(BackendAction Action,
                                       std::unique_ptr<raw_pwrite_stream> OS,
                                       BackendConsumer *BC) {
+  if (CodeGenOpts.Zera && !CodeGenOpts.DisableLLVMPasses) {
+    if (!KITSUNE_CUDA_ENABLED || !KITSUNE_OPENCILK_ENABLED ||
+        !LLVM_HAS_NVPTX_TARGET) {
+      Diags.Report(diag::err_drv_zera_unavailable);
+      return;
+    }
+    if (CodeGenOpts.OptimizationLevel == 0 || CodeGenOpts.OptimizeSize) {
+      const char *Opt = "-O0";
+      if (CodeGenOpts.OptimizeSize)
+        Opt = CodeGenOpts.OptimizeSize == 1 ? "-Os" : "-Oz";
+      Diags.Report(diag::err_drv_zera_optimization_level) << Opt;
+      return;
+    }
+  }
+
   TimeRegion Region(CodeGenOpts.TimePasses ? &CodeGenerationTime : nullptr);
   setCommandLineOpts(CodeGenOpts);
 

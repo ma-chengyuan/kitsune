@@ -1338,6 +1338,12 @@ def cuda_path_EQ : Joined<["--"], "cuda-path=">, Group<i_Group>,
   HelpText<"CUDA installation path">;
 def cuda_path_ignore_env : Flag<["--"], "cuda-path-ignore-env">, Group<i_Group>,
   HelpText<"Ignore environment variables to detect CUDA installation">;
+def cuabi_arch_EQ : Joined<["--"], "cuabi-arch=">,
+  HelpText<"Select the CUDA architecture for Tapir loops with -fzera">;
+def cuabi_dont_fuse_reducers : Flag<["--"], "cuabi-dont-fuse-reducers">,
+  HelpText<"Disable CUDA reducer fusion with -fzera">;
+def cuabi_naive_atomics : Flag<["--"], "cuabi-naive-atomics">,
+  HelpText<"Use naive CUDA atomics for reducers with -fzera">;
 def ptxas_path_EQ : Joined<["--"], "ptxas-path=">, Group<i_Group>,
   HelpText<"Path to ptxas (used for compiling CUDA code)">;
 def fcuda_flush_denormals_to_zero : Flag<["-"], "fcuda-flush-denormals-to-zero">,
@@ -3345,9 +3351,25 @@ def fopencilk : Flag<["-"], "fopencilk">, Group<f_Group>,
 def fopencilk_kitsune : Flag<["-"], "fopencilk-kitsune">, Group<f_Group>,
   Visibility<[ClangOption, CC1Option]>,
   HelpText<"Enable OpenCilk IR emission for the Kitsune handoff">;
+def fzera : Flag<["-"], "fzera">, Group<f_Group>,
+  Visibility<[ClangOption, CC1Option]>,
+  HelpText<"Enable mixed OpenCilk and CUDA Tapir lowering">,
+  MarshallingInfoFlag<CodeGenOpts<"Zera">>;
 def opencilk_abi_bitcode_EQ : Joined<["--"], "opencilk-abi-bitcode=">,
   Visibility<[CC1Option]>, HelpText<"Path to OpenCilk ABI bitcode file">,
   MarshallingInfoString<CodeGenOpts<"OpenCilkABIBitcodeFile">>;
+def kitcuda_abi_bitcode_EQ : Joined<["--"], "kitcuda-abi-bitcode=">,
+  Visibility<[CC1Option]>, HelpText<"Path to Kitsune CUDA ABI bitcode file">,
+  MarshallingInfoString<CodeGenOpts<"KitCudaABIBitcodeFile">>;
+def kitcuda_libdevice_EQ : Joined<["--"], "kitcuda-libdevice=">,
+  Visibility<[CC1Option]>, HelpText<"Path to CUDA libdevice bitcode file">,
+  MarshallingInfoString<CodeGenOpts<"KitCudaLibDeviceFile">>;
+def kitcuda_ptxas_EQ : Joined<["--"], "kitcuda-ptxas=">,
+  Visibility<[CC1Option]>, HelpText<"Path to the CUDA PTX assembler">,
+  MarshallingInfoString<CodeGenOpts<"KitCudaPtxasPath">>;
+def kitcuda_fatbinary_EQ : Joined<["--"], "kitcuda-fatbinary=">,
+  Visibility<[CC1Option]>, HelpText<"Path to the CUDA fatbinary tool">,
+  MarshallingInfoString<CodeGenOpts<"KitCudaFatbinaryPath">>;
 
 def fmudflapth : Flag<["-"], "fmudflapth">, Group<f_Group>;
 def fmudflap : Flag<["-"], "fmudflap">, Group<f_Group>;

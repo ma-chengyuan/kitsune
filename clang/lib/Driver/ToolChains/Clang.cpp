@@ -4925,6 +4925,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       Args.hasFlag(options::OPT_fgpu_rdc, options::OPT_fno_gpu_rdc, false);
   bool IsUsingLTO = D.isUsingLTO(IsDeviceOffloadAction);
   auto LTOMode = D.getLTOMode(IsDeviceOffloadAction);
+  bool IsZera = Args.hasArg(options::OPT_fzera);
+  bool IsZeraCodeGen = IsZera && isa<BackendJobAction, AssembleJobAction>(JA);
 
   // Extract API doesn't have a main input file, so invent a fake one as a
   // placeholder.
@@ -6283,6 +6285,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     } else {
       A->render(Args, CmdArgs);
     }
+  } else if (IsZera) {
+    CmdArgs.push_back("-O1");
   }
 
   // Warn about ignored options to clang.
@@ -6637,7 +6641,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   Args.AddLastArg(CmdArgs, options::OPT_fopencilk);
   Args.AddLastArg(CmdArgs, options::OPT_fopencilk_kitsune);
   Args.AddLastArg(CmdArgs, options::OPT_fcilkplus);
-  if (auto TapirTarget = parseTapirTarget(Args)) {
+  Args.AddLastArg(CmdArgs, options::OPT_fzera);
+  if (IsZera) {
+    if (IsZeraCodeGen)
+      TC.AddZeraRuntimeArgs(Args, CmdArgs);
+  } else if (auto TapirTarget = parseTapirTarget(Args)) {
     auto const &Triple = getToolChain().getTriple();
 
     // At least one runtime has been implemented for these operating systems.
@@ -7630,8 +7638,18 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     }
     CmdArgs.push_back(Arg->getValue());
   }
-  for (const Arg *A : Args.filtered(options::OPT_mllvm)) {
+  for (const Arg *A :
+       Args.filtered(options::OPT_mllvm, options::OPT_cuabi_arch_EQ,
+                     options::OPT_cuabi_dont_fuse_reducers,
+                     options::OPT_cuabi_naive_atomics)) {
     A->claim();
+    if (!A->getOption().matches(options::OPT_mllvm)) {
+      if (IsZeraCodeGen) {
+        CmdArgs.push_back("-mllvm");
+        CmdArgs.push_back(Args.MakeArgString(A->getAsString(Args)));
+      }
+      continue;
+    }
 
     // We translate this by hand to the -cc1 argument, since nightly test uses
     // it and developers have been trained to spell it with -mllvm. Both

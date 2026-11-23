@@ -33,7 +33,7 @@ std::optional<TapirTargetID> clang::parseTapirTarget(const opt::ArgList &Args) {
         .Case("qthreads", TapirTargetID::Qthreads)
         .Case("realm", TapirTargetID::Realm)
         .Default(std::nullopt);
-  if (Args.hasArg(options::OPT_fopencilk))
+  if (Args.hasArg(options::OPT_fopencilk, options::OPT_fzera))
     return TapirTargetID::OpenCilk;
   return std::nullopt;
 }
@@ -59,6 +59,10 @@ clang::parseTapirNVArchTarget(const opt::ArgList &Args) {
 
 std::optional<llvm::StringRef>
 clang::getTargetConfigFileName(const opt::ArgList &Args) {
+  // Mixed mode owns its lowering setup and runtime paths.
+  if (Args.hasArgNoClaim(options::OPT_fzera))
+    return std::nullopt;
+
   if (std::optional<TapirTargetID> tt = parseTapirTarget(Args)) {
     switch (*tt) {
     case TapirTargetID::None:

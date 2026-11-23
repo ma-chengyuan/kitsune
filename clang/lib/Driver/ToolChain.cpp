@@ -1756,10 +1756,93 @@ static StringRef getArchNameForOpenCilkRTLib(const ToolChain &TC,
   return getArchNameForCompilerRTLib(TC, Args);
 }
 
+static bool checkZeraFile(const ToolChain &TC, StringRef Kind, StringRef Path) {
+  if (!Path.empty() && TC.getVFS().exists(Path))
+    return true;
+  TC.getDriver().Diag(diag::err_drv_zera_missing_file) << Kind << Path;
+  return false;
+}
+
+void ToolChain::AddZeraRuntimeArgs(const ArgList &Args,
+                                   ArgStringList &CmdArgs) const {
+  AddOpenCilkABIBitcode(Args, CmdArgs);
+  auto AddFile = [&](StringRef Option, StringRef Kind, StringRef Path) {
+    if (checkZeraFile(*this, Kind, Path))
+      CmdArgs.push_back(Args.MakeArgString(Option + Path));
+  };
+
+  AddFile("--kitcuda-abi-bitcode=", "KitCUDA ABI bitcode",
+          concat(D.ResourceDir, "lib", "kitcuda.bc"));
+
+  // The compiler's runtime files and the external CUDA toolkit may be
+  // relocated independently.
+  if (const Arg *A = Args.getLastArg(options::OPT_cuda_path_EQ)) {
+    StringRef Path = A->getValue();
+    AddFile("--kitcuda-libdevice=", "CUDA libdevice bitcode",
+            concat(Path, "nvvm", "libdevice", "libdevice.10.bc"));
+    AddFile("--kitcuda-ptxas=", "ptxas", concat(Path, "bin", "ptxas"));
+    AddFile("--kitcuda-fatbinary=", "fatbinary",
+            concat(Path, "bin", "fatbinary"));
+  } else {
+    AddFile("--kitcuda-libdevice=", "CUDA libdevice bitcode",
+            KITSUNE_CUDA_LIBDEVICE_BC);
+    AddFile("--kitcuda-ptxas=", "ptxas", KITSUNE_CUDA_PTXAS);
+    AddFile("--kitcuda-fatbinary=", "fatbinary", KITSUNE_CUDA_FATBINARY);
+  }
+}
+
+void ToolChain::AddZeraLinkerArgs(const ArgList &Args,
+                                  ArgStringList &CmdArgs) const {
+  std::string LibDir = concat(D.ResourceDir, "lib");
+  std::string Shim = concat(LibDir, "libzera_alloc.a");
+  std::string KitRT = concat(LibDir, "libkitrt.so");
+
+  // Load replacement new/delete even when used only from a linked shared
+  // library. Scope whole-archive to the shim.
+  if (checkZeraFile(*this, "allocation shim", Shim)) {
+    CmdArgs.push_back("--push-state");
+    CmdArgs.push_back("--whole-archive");
+    CmdArgs.push_back(Args.MakeArgString(Shim));
+    CmdArgs.push_back("--pop-state");
+  }
+  if (checkZeraFile(*this, "Kitsune runtime library", KitRT))
+    CmdArgs.push_back(Args.MakeArgString(KitRT));
+
+  const Arg *CudaPath = Args.getLastArg(options::OPT_cuda_path_EQ);
+  std::string CudaLibDir = CudaPath ? concat(CudaPath->getValue(), "lib64")
+                                    : KITSUNE_CUDA_LIBRARY_DIR;
+  if (!CudaLibDir.empty()) {
+    CmdArgs.push_back("-L");
+    CmdArgs.push_back(Args.MakeArgString(CudaLibDir));
+  }
+  // Keep CUDA's runtime as a direct dependency, so this link's runtime
+  // search path also applies when kitrt uses it.
+  CmdArgs.push_back("--push-state");
+  CmdArgs.push_back("--no-as-needed");
+  CmdArgs.push_back("-lcudart");
+  CmdArgs.push_back("--pop-state");
+
+  if (Args.hasFlag(options::OPT_frtlib_add_rpath,
+                   options::OPT_fno_rtlib_add_rpath, true)) {
+    CmdArgs.push_back("-rpath");
+    CmdArgs.push_back(Args.MakeArgString(LibDir));
+    if (!CudaLibDir.empty()) {
+      CmdArgs.push_back("-rpath");
+      CmdArgs.push_back(Args.MakeArgString(CudaLibDir));
+    }
+  }
+}
+
 void ToolChain::AddKitsuneLinkerArgs(const ArgList &Args,
                                      ArgStringList &CmdArgs) const {
+  bool IsZera = Args.hasArg(options::OPT_fzera);
+  if (IsZera && Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs,
+                            options::OPT_r))
+    return;
+
   std::optional<llvm::TapirTargetID> TapirTarget = parseTapirTarget(Args);
-  bool UseKitsuneRuntime = TapirTarget && Args.hasArg(options::OPT_ftapir_EQ);
+  bool UseKitsuneRuntime =
+      !IsZera && TapirTarget && Args.hasArg(options::OPT_ftapir_EQ);
   bool IsKokkos = D.CCCIsCXX() && Args.hasArg(options::OPT_fkokkos);
 
   if (TapirTarget) {
@@ -1838,6 +1921,9 @@ void ToolChain::AddKitsuneLinkerArgs(const ArgList &Args,
       break;
     }
   }
+
+  if (IsZera)
+    AddZeraLinkerArgs(Args, CmdArgs);
 
   if (IsKokkos) {
     const char* LibDir = Args.MakeArgString(concat(D.ResourceDir, "lib64"));
@@ -1989,7 +2075,8 @@ std::string ToolChain::getOpenCilkRTBasename(const ArgList &Args,
 
 std::string ToolChain::getOpenCilkRT(const ArgList &Args, StringRef Component,
                                      FileType Type) const {
-  bool ExplicitTapirTarget = Args.hasArg(options::OPT_ftapir_EQ);
+  bool ExplicitTapirTarget =
+      !Args.hasArg(options::OPT_fzera) && Args.hasArg(options::OPT_ftapir_EQ);
   const std::string RTBasename =
       getOpenCilkRTBasename(Args, Component, Type, /*AddArch=*/false);
   if (ExplicitTapirTarget) {

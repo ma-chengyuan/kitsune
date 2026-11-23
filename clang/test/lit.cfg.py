@@ -110,6 +110,9 @@ tools = [
 if config.clang_examples:
     config.available_features.add("examples")
 
+if config.have_zera:
+    config.available_features.add("zera")
+
 
 def have_host_jit_feature_support(feature_name):
     clang_repl_exe = lit.util.which("clang-repl", config.clang_tools_dir)

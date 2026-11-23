@@ -93,9 +93,18 @@ CodeGenFunction::GetTapirTargetAttr(ArrayRef<const Attr *> Attrs,
   // FIXME KITSUNE: This will check for the first occurrence of the tapir target
   // attribute and break immediately if it finds it. Is this what we actually
   // want?
-  for (auto curAttr : Attrs) {
-    if (curAttr->getKind() == attr::TapirTarget) {
-      switch (cast<const TapirTargetAttr>(curAttr)->getTapirTargetAttrType()) {
+  for (const Attr *A : Attrs) {
+    if (const auto *Target = dyn_cast<TapirTargetAttr>(A)) {
+      auto TargetType = Target->getTapirTargetAttrType();
+      if (CGM.getCodeGenOpts().Zera && TargetType != TapirTargetAttr::Serial &&
+          TargetType != TapirTargetAttr::Cuda &&
+          TargetType != TapirTargetAttr::OpenCilk) {
+        CGM.getDiags().Report(Target->getLocation(),
+                              diag::err_fe_zera_tapir_loop_target)
+            << TapirTargetAttr::ConvertTapirTargetAttrTyToStr(TargetType);
+        return std::nullopt;
+      }
+      switch (TargetType) {
       case TapirTargetAttr::None:
         return llvm::TapirTargetID::None;
       case TapirTargetAttr::Serial:

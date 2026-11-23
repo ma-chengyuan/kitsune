@@ -1,6 +1,12 @@
 # Test runner infrastructure for Clang. This configures the Clang test trees
 # for use by Lit, and delegates to LLVM's lit test handlers.
 
+set(CLANG_TEST_ZERA 0)
+if(KITSUNE_CUDA_ENABLED AND KITSUNE_OPENCILK_ENABLED
+    AND "NVPTX" IN_LIST LLVM_TARGETS_TO_BUILD)
+  set(CLANG_TEST_ZERA 1)
+endif()
+
 llvm_canonicalize_cmake_booleans(
   CLANG_BUILD_EXAMPLES
   CLANG_BUILT_STANDALONE

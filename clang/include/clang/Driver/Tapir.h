@@ -23,8 +23,8 @@ class ArgList;
 
 namespace clang {
 
-/// Return the explicit -ftapir target, or OpenCilk for -fopencilk without an
-/// explicit target. Return std::nullopt if no valid target is selected.
+/// Return the explicit -ftapir target, or OpenCilk by default with -fopencilk
+/// or -fzera. Return std::nullopt if no valid target is selected.
 std::optional<llvm::TapirTargetID>
 parseTapirTarget(const llvm::opt::ArgList &Args);
 

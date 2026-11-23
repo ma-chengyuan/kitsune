@@ -861,6 +861,13 @@ public:
   virtual void AddOpenCilkABIBitcode(const llvm::opt::ArgList &Args,
                                      llvm::opt::ArgStringList &CmdArgs,
                                      bool IsLTO = false) const;
+
+  void AddZeraRuntimeArgs(const llvm::opt::ArgList &Args,
+                          llvm::opt::ArgStringList &CmdArgs) const;
+
+private:
+  void AddZeraLinkerArgs(const llvm::opt::ArgList &Args,
+                         llvm::opt::ArgStringList &CmdArgs) const;
 };
 
 /// Set a ToolChain's effective triple. Reset it when the registration object

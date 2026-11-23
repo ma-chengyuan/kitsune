@@ -3862,7 +3862,7 @@ bool CompilerInvocation::ParseLangArgs(LangOptions &Opts, ArgList &Args,
                                        DiagnosticsEngine &Diags) {
   unsigned NumErrorsBefore = Diags.getNumErrors();
 
-  bool CilkKitsune = Args.hasArg(OPT_fopencilk_kitsune);
+  bool CilkKitsune = Args.hasArg(OPT_fopencilk_kitsune, OPT_fzera);
   bool OpenCilk = Args.hasArg(OPT_fopencilk) || CilkKitsune;
   bool CilkPlus = Args.hasArg(OPT_fcilkplus);
   if (OpenCilk) {
@@ -4523,7 +4523,7 @@ bool CompilerInvocation::ParseKitsuneArgs(KitsuneOptions &Opts, ArgList &Args,
         Diags.Report(diag::err_drv_kitsune_hip_target_disabled);
       break;
     case llvm::TapirTargetID::OpenCilk:
-      if (!KITSUNE_OPENCILK_ENABLED)
+      if (!KITSUNE_OPENCILK_ENABLED && !Args.hasArg(OPT_fzera))
         Diags.Report(diag::err_drv_kitsune_opencilk_target_disabled);
       break;
     case llvm::TapirTargetID::OpenMP:

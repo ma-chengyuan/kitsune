@@ -945,9 +945,9 @@ void LoopInfoStack::push(BasicBlock *Header, clang::ASTContext &Ctx,
   setMustProgress(MustProgress);
 
   if (CGOpts.OptimizationLevel > 0)
-    // Disable unrolling for the loop, if unrolling is disabled (via
-    // -fno-unroll-loops) and no pragmas override the decision.
-    if (!CGOpts.UnrollLoops &&
+    // Preserve the no-unroll hint on source loops prepared for CUDA outlining,
+    // just as when the frontend emits IR with -fno-unroll-loops.
+    if ((!CGOpts.UnrollLoops || CGOpts.Zera) &&
         (StagedAttrs.UnrollEnable == LoopAttributes::Unspecified &&
          StagedAttrs.UnrollCount == 0))
       setUnrollState(LoopAttributes::Disable);

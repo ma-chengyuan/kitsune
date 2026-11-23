@@ -840,6 +840,14 @@ def err_drv_cilk_objc : Error<"Cilk does not support Objective-C">;
 def err_drv_cilkplus_requires_tapir_target : Error<
   "native compilation and linking with '-fcilkplus' require a lowering target "
   "selected with '-ftapir='. Use '-fopencilk' for the OpenCilk runtime">;
+def err_drv_zera_optimization_level : Error<
+  "'-fzera' supports optimization levels -O1, -O2 and -O3 (got '%0')">;
+def err_drv_zera_unavailable : Error<
+  "'-fzera' requires a build with OpenCilk and CUDA Tapir support and the NVPTX target">;
+def err_drv_zera_cuda_arch : Error<
+  "unsupported CUDA architecture '%0' for '-fzera'">;
+def err_drv_zera_missing_file : Error<
+  "cannot find '-fzera' %0: '%1'">;
 
 // FIXME KITSUNE: Some of this should probably go away since we don't want to
 // give opencilk any special treatment here.

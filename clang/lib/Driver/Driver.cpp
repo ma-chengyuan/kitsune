@@ -49,6 +49,7 @@
 #include "ToolChains/WebAssembly.h"
 #include "ToolChains/XCore.h"
 #include "ToolChains/ZOS.h"
+#include "kitsune/Config/config.h"
 #include "clang/Basic/DiagnosticDriver.h"
 #include "clang/Basic/TargetID.h"
 #include "clang/Basic/Version.h"
@@ -804,7 +805,8 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
     return;
   }
 
-  bool IsTapir = C.getInputArgs().hasArg(options::OPT_ftapir_EQ);
+  bool IsTapir =
+      C.getInputArgs().hasArg(options::OPT_ftapir_EQ, options::OPT_fzera);
   if (IsTapir && (IsCuda || IsHIP)) {
     Diag(clang::diag::err_drv_mix_tapir_cuda_hip);
     return;
@@ -1270,6 +1272,137 @@ static bool requiresCilkPlusTapirTarget(const Action *A) {
   return llvm::any_of(A->inputs(), requiresCilkPlusTapirTarget);
 }
 
+static bool hasBackendAction(const Action *A) {
+  return isa<BackendJobAction>(A) ||
+         llvm::any_of(A->inputs(), hasBackendAction);
+}
+
+static bool checkZeraCudaArch(const Driver &D, const ArgList &Args) {
+  bool NeedsValue = false;
+  for (const Arg *A :
+       Args.filtered(options::OPT_mllvm, options::OPT_cuabi_arch_EQ,
+                     options::OPT_cuabi_dont_fuse_reducers,
+                     options::OPT_cuabi_naive_atomics)) {
+    // Match the option stream received by LLVM, including a value supplied
+    // by a separate -mllvm argument.
+    std::string Rendered;
+    StringRef Arg;
+    if (A->getOption().matches(options::OPT_mllvm)) {
+      Arg = A->getValue();
+    } else {
+      Rendered = A->getAsString(Args);
+      Arg = Rendered;
+    }
+    if (!NeedsValue) {
+      if (!Arg.consume_front("-"))
+        continue;
+      Arg.consume_front("-");
+      if (Arg == "cuabi-arch") {
+        NeedsValue = true;
+        continue;
+      }
+      if (!Arg.consume_front("cuabi-arch="))
+        continue;
+    }
+
+    if (llvm::getTapirCudaVirtualArch(Arg).empty()) {
+      D.Diag(diag::err_drv_zera_cuda_arch) << Arg;
+      return false;
+    }
+    NeedsValue = false;
+  }
+  if (NeedsValue) {
+    D.Diag(diag::err_drv_missing_argument) << "-cuabi-arch" << 1;
+    return false;
+  }
+  return true;
+}
+
+static bool checkZeraOptions(const Compilation &C) {
+  const Driver &D = C.getDriver();
+  const DerivedArgList &Args = C.getArgs();
+  bool IsZera = Args.hasArg(options::OPT_fzera);
+  for (const Arg *A : Args.filtered(options::OPT_cuabi_arch_EQ,
+                                    options::OPT_cuabi_dont_fuse_reducers,
+                                    options::OPT_cuabi_naive_atomics)) {
+    A->claim();
+    if (!IsZera) {
+      D.Diag(diag::err_drv_argument_only_allowed_with)
+          << A->getAsString(Args) << "-fzera";
+      return false;
+    }
+  }
+  if (!IsZera)
+    return true;
+  Args.ClaimAllArgs(options::OPT_cuda_path_EQ);
+
+  // Skip runtime and backend requirements for preprocessing and semantic
+  // checks. A link-only invocation still needs the mixed runtime libraries.
+  bool HasBackend = llvm::any_of(C.getActions(), hasBackendAction);
+  bool HasLink = llvm::any_of(C.getActions(), [](const Action *A) {
+    return isa<LinkJobAction, LinkerWrapperJobAction>(A);
+  });
+  if (!HasBackend && !HasLink)
+    return true;
+
+  if (!KITSUNE_OPENCILK_ENABLED || !KITSUNE_CUDA_ENABLED ||
+      !LLVM_HAS_NVPTX_TARGET) {
+    D.Diag(diag::err_drv_zera_unavailable);
+    return false;
+  }
+
+  const llvm::Triple &Triple = C.getDefaultToolChain().getTriple();
+  if (!Triple.isOSLinux() || Triple.isAndroid() ||
+      (Triple.getArch() != llvm::Triple::x86_64 &&
+       Triple.getArch() != llvm::Triple::aarch64)) {
+    D.Diag(diag::err_drv_unsupported_opt_for_target)
+        << "-fzera" << Triple.str();
+    return false;
+  }
+
+  if (const Arg *A = Args.getLastArg(options::OPT_ftapir_EQ)) {
+    if (StringRef(A->getValue()) != "opencilk") {
+      D.Diag(diag::err_drv_argument_not_allowed_with)
+          << A->getAsString(Args) << "-fzera";
+      return false;
+    }
+  }
+  if (D.isUsingLTO()) {
+    const Arg *A = Args.getLastArg(options::OPT_flto_EQ);
+    D.Diag(diag::err_drv_argument_not_allowed_with)
+        << (A ? A->getAsString(Args) : "-flto") << "-fzera";
+    return false;
+  }
+  if (HasLink && !Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs,
+                              options::OPT_r)) {
+    if (const Arg *A =
+            Args.getLastArg(options::OPT_static, options::OPT_static_pie)) {
+      D.Diag(diag::err_drv_argument_not_allowed_with)
+          << A->getAsString(Args) << "-fzera";
+      return false;
+    }
+  }
+  if (!HasBackend)
+    return true;
+
+  if (D.embedBitcodeInObject()) {
+    D.Diag(diag::err_drv_argument_not_allowed_with)
+        << Args.getLastArg(options::OPT_fembed_bitcode_EQ)->getAsString(Args)
+        << "-fzera";
+    return false;
+  }
+  if (const Arg *A = Args.getLastArg(options::OPT_O_Group)) {
+    if (!A->getOption().matches(options::OPT_O) ||
+        !llvm::StringSwitch<bool>(A->getValue())
+             .Cases("1", "2", "3", true)
+             .Default(false)) {
+      D.Diag(diag::err_drv_zera_optimization_level) << A->getAsString(Args);
+      return false;
+    }
+  }
+  return checkZeraCudaArch(D, Args);
+}
+
 Compilation *Driver::BuildCompilation(ArrayRef<const char *> ArgList) {
   llvm::PrettyStackTraceString CrashInfo("Compilation construction");
 
@@ -1620,9 +1753,15 @@ Compilation *Driver::BuildCompilation(ArrayRef<const char *> ArgList) {
     return C;
   }
 
+  if (!checkZeraOptions(*C)) {
+    C->setContainsError();
+    return C;
+  }
+
   if (TranslatedArgs->hasArgNoClaim(options::OPT_fcilkplus) &&
       !TranslatedArgs->hasArgNoClaim(options::OPT_fopencilk,
-                                     options::OPT_fopencilk_kitsune)) {
+                                     options::OPT_fopencilk_kitsune,
+                                     options::OPT_fzera)) {
     const Arg *Target = TranslatedArgs->getLastArgNoClaim(options::OPT_ftapir_EQ);
     if ((!Target || StringRef(Target->getValue()) == "none") &&
         llvm::any_of(C->getActions(), requiresCilkPlusTapirTarget)) {

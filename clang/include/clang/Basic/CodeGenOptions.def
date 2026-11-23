@@ -314,6 +314,7 @@ VALUE_CODEGENOPT(TimeTraceGranularity, 32, 500) ///< Minimum time granularity (i
 CODEGENOPT(UnrollLoops       , 1, 0) ///< Control whether loops are unrolled.
 CODEGENOPT(RerollLoops       , 1, 0) ///< Control whether loops are rerolled.
 CODEGENOPT(StripmineLoop     , 1, 0) ///< Run Tapir loop stripmining.
+CODEGENOPT(Zera              , 1, 0) ///< Optimize and lower mixed OpenCilk/CUDA code.
 CODEGENOPT(NoUseJumpTables   , 1, 0) ///< Set when -fno-jump-tables is enabled.
 VALUE_CODEGENOPT(UnwindTables, 2, 0) ///< Unwind tables (1) or asynchronous unwind tables (2)
 CODEGENOPT(LinkBitcodePostopt, 1, 0) ///< Link builtin bitcodes after optimization pipeline.
