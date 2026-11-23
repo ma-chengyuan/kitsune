@@ -10904,6 +10904,7 @@ public:
                                    BuildForRangeKind Kind);
   StmtResult BuildCilkForRangeStmt(CXXForRangeStmt *S);
   StmtResult FinishCilkForRangeStmt(Stmt *S, Stmt *B);
+  void CheckCilkForRangeBody(CXXForRangeStmt &ForRange);
   StmtResult BuildCilkForStmt(SourceLocation CilkForLoc,
                               SourceLocation LParenLoc,
                               Stmt *Init, Expr *Cond, Expr *Inc,

@@ -17003,6 +17003,7 @@ TreeTransform<Derived>::TransformCilkForRangeStmt(CilkForRangeStmt *S) {
     return StmtError();
 
   if (LoopIndex.isUsable()) {
+    auto *Range = cast<CXXForRangeStmt>(ForRange.get());
     // The limit initializer refers to the transformed begin and end iterators.
     StmtResult Limit = getDerived().TransformStmt(S->getLimitStmt());
     if (Limit.isInvalid())
@@ -17014,10 +17015,10 @@ TreeTransform<Derived>::TransformCilkForRangeStmt(CilkForRangeStmt *S) {
     if (Inc.isInvalid())
       return StmtError();
 
+    getSema().CheckCilkForRangeBody(*Range);
     auto *IndexStmt = cast<DeclStmt>(LoopIndex.get());
     return new (getSema().Context) CilkForRangeStmt(
-        getSema().Context, cast<CXXForRangeStmt>(ForRange.get()),
-        cast<VarDecl>(IndexStmt->getSingleDecl()),
+        getSema().Context, Range, cast<VarDecl>(IndexStmt->getSingleDecl()),
         cast<DeclStmt>(LocalLoopIndex.get()), cast<DeclStmt>(Limit.get()),
         Cond.get(), Inc.get(), IndexStmt);
   }
