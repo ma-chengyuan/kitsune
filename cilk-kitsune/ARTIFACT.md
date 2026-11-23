@@ -1,6 +1,6 @@
 # Clang 19 artifact checkout
 
-The Kitsune root builds Clang 19 with OpenCilk language support, the CPU and CUDA lowering passes, and their runtimes. Shockwave uses the root compiler through `cilk-kitsune/ock++`, which stages frontend IR emission, Tapir lowering and linking. Standalone CPU Cilk and the tiled CUDA NTT use the root driver directly. All three routes use resources from the same build.
+The Kitsune root builds Clang 19 with OpenCilk language support, the CPU and CUDA lowering passes, and their runtimes. Shockwave uses the native `clang++ -fzera` driver for mixed CPU and CUDA code. It compiles unannotated Cilk loops for the CPU and outlines loops marked `[[tapir::target("cuda")]]` for the GPU. The driver finds the ABI bitcode, allocation support and runtimes in its resource directory. Standalone CPU Cilk uses `-fopencilk`, and the tiled CUDA NTT uses `-ftapir=cuda`.
 
 Kitsune leaves the preferred location of shared CUDA allocations unset. It initially requests a GPU mapping for indirect access. When a GPU kernel directly uses a buffer with a dedicated allocation, the runtime clears its mapping hint and prefetches the buffer to the GPU. This lets CUDA migrate pages on later accesses by either processor. Small objects that share pool pages retain the mapping because neighboring objects can be in use on the CPU. The prefetch smoke test checks both allocation paths using CUDA's range attributes.
 
@@ -35,7 +35,9 @@ cilk-kitsune/build-artifact.sh
 cilk-kitsune/smoke-artifact.sh
 ```
 
-`BUILD_DIR` defaults to the checkout's `build/` directory and `KITSUNE_PATH` defaults to `$BUILD_DIR/kitsune`. The wrapper's frontend and backend both use this prefix. The optional `OPENCILK_PATH` override selects an external frontend for comparisons with the two-compiler reference. `CMAKE_BUILD_PARALLEL_LEVEL` controls build parallelism and `LLVM_USE_LINKER` selects the host linker. The first build fetches Kitsune's pinned Cheetah and runtime dependencies.
+`BUILD_DIR` defaults to the checkout's `build/` directory and `KITSUNE_PATH` defaults to `$BUILD_DIR/kitsune`. The smoke script uses the compiler in this prefix. The retained `ock++` launcher and its optional `OPENCILK_PATH` override support comparisons with the staged reference. `CMAKE_BUILD_PARALLEL_LEVEL` controls build parallelism and `LLVM_USE_LINKER` selects the host linker. The first build fetches Kitsune's pinned Cheetah and runtime dependencies.
+
+Use `clang++ -O2 -fzera` to compile and link a mixed program. For separate compilation, pass `-fzera` on both the compile and final link commands. Set `--cuda-path=/path/to/cuda` to select a relocated copy of the CUDA toolkit version used to build the compiler and `--cuabi-arch=sm_80` to select the GPU code target. The driver embeds PTX for use on compatible newer GPUs. The mixed pipeline supports `-O1`, `-O2` and `-O3`; it defaults to `-O1`.
 
 Use `clang++ -fopencilk` for a native CPU Cilk executable and add `-static` for a static link. The legacy `-fcilkplus` spelling supports parsing and Tapir IR emission. For native code with that spelling, select a lowering target explicitly, such as `-ftapir=opencilk` or `-ftapir=serial`.
 
@@ -70,22 +72,15 @@ It exercises separate compilation and a source-plus-object link. It checks
 CPU exception and reducer cleanup at `-O0` and `-O2`, a CPU-to-GPU reducer
 across the implicit sync, fused, unfused and naive-atomic GPU reductions, a
 4,097-element CPU and GPU prefix scan, and the CUDA launch in the nested and
-debug-info transpose fixtures. Intermediate frontend and lowered IR are saved
+debug-info transpose fixtures. Lowered IR and runtime launch logs are saved
 in the run directory. The cache test can also run under [ThreadSanitizer](../kitsune/runtime/cuda/README.md#launch-cache-test).
 
-Build the same per-row Shockwave source (`60dd693`) in separate build
-directories with the reference and candidate compilers. For the candidate,
-keep the `KITSUNE_PATH` and `CUDA_HOME` set above and point
-`ZERA_COMPILER` to the Kitsune checkout. Run from the Shockwave source directory
+Build Shockwave's per-row prover using the `artifact-zera` preset from the matching Shockwave checkout. Set the compiler to the absolute path under the installed prefix or the compiler build directory. From the Shockwave checkout run
 
 ```sh
-ZERA_COMPILER=/path/to/kitsune-checkout
-launcher="cmake;-E;env;OPENCILK_PATH=$KITSUNE_PATH;KITSUNE_PATH=$KITSUNE_PATH;CUDA_HOME=$CUDA_HOME;PATH=$CUDA_HOME/bin:$PATH;$ZERA_COMPILER/cilk-kitsune/ock++"
-cmake --preset artifact-kitsune -B build-stage3 \
-  -DCMAKE_CXX_COMPILER="$KITSUNE_PATH/bin/clang++" \
-  -DCMAKE_CXX_COMPILER_LAUNCHER="$launcher" \
-  -DCMAKE_CXX_LINKER_LAUNCHER="$launcher"
-cmake --build build-stage3 --target cu-zksnark
+cmake --preset artifact-zera -DCMAKE_CXX_COMPILER="$KITSUNE_PATH/bin/clang++"
+cmake --build build_zera --target cu-zksnark
+SPARTAN_N=21 CILK_NWORKERS=8 build_zera/cu-zksnark test "Spartan proof"
 ```
 
 Keep the builds' runtime libraries separate when comparing changes to kitrt.
