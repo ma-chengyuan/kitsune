@@ -33,6 +33,7 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/Thunk.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -73,6 +74,7 @@ class ItaniumMangleContextImpl : public ItaniumMangleContext {
   typedef std::pair<const DeclContext*, IdentifierInfo*> DiscriminatorKeyTy;
   llvm::DenseMap<DiscriminatorKeyTy, unsigned> Discriminator;
   llvm::DenseMap<const NamedDecl*, unsigned> Uniquifier;
+  llvm::DenseSet<const HyperobjectType *> DiagnosedHyperobjectRTTI;
   const DiscriminatorOverrideTy DiscriminatorOverride = nullptr;
   NamespaceDecl *StdNamespace = nullptr;
 
@@ -114,6 +116,7 @@ public:
                          bool NormalizeIntegers) override;
   void mangleCanonicalTypeName(QualType T, raw_ostream &,
                                bool NormalizeIntegers) override;
+  void diagnoseUnsupportedHyperobjectRTTI(const HyperobjectType *Type);
 
   void mangleCXXCtorComdat(const CXXConstructorDecl *D, raw_ostream &) override;
   void mangleCXXDtorComdat(const CXXDestructorDecl *D, raw_ostream &) override;
@@ -221,6 +224,7 @@ class CXXNameMangler {
   /// languages that can't represent and encode C/C++ integer types.
   bool NormalizeIntegers = false;
 
+  bool IsRTTI = false;
   bool NullOut = false;
   /// In the "DisableDerivedAbiTags" mode derived ABI tags are not calculated.
   /// This mode is used when mangler creates another mangler recursively to
@@ -432,7 +436,8 @@ public:
       : Context(C), Out(Out_), NormalizeIntegers(NormalizeIntegers_),
         NullOut(false), Structor(nullptr), AbiTagsRoot(AbiTags) {}
   CXXNameMangler(CXXNameMangler &Outer, raw_ostream &Out_)
-      : Context(Outer.Context), Out(Out_), Structor(Outer.Structor),
+      : Context(Outer.Context), Out(Out_), IsRTTI(Outer.IsRTTI),
+        Structor(Outer.Structor),
         StructorType(Outer.StructorType), SeqID(Outer.SeqID),
         FunctionTypeDepth(Outer.FunctionTypeDepth), AbiTagsRoot(AbiTags),
         Substitutions(Outer.Substitutions),
@@ -452,6 +457,7 @@ public:
 
   raw_ostream &getStream() { return Out; }
 
+  void setRTTI() { IsRTTI = true; }
   void disableDerivedAbiTags() { DisableDerivedAbiTags = true; }
   static bool shouldHaveAbiTags(ItaniumMangleContextImpl &C, const VarDecl *VD);
 
@@ -3769,6 +3775,10 @@ void CXXNameMangler::mangleType(const ComplexType *T) {
 }
 
 void CXXNameMangler::mangleType(const HyperobjectType *H) {
+  // Callback expressions participate in type identity, but their identities
+  // are absent from the mangled name.
+  if (IsRTTI && !NullOut)
+    Context.diagnoseUnsupportedHyperobjectRTTI(H);
   Out << 'H';
   mangleType(H->getElementType());
 }
@@ -7306,8 +7316,25 @@ void ItaniumMangleContextImpl::mangleCXXRTTI(QualType Ty, raw_ostream &Out) {
   // <special-name> ::= TI <type>  # typeinfo structure
   assert(!Ty.hasQualifiers() && "RTTI info cannot have top-level qualifiers");
   CXXNameMangler Mangler(*this, Out);
+  Mangler.setRTTI();
   Mangler.getStream() << "_ZTI";
   Mangler.mangleType(Ty);
+}
+
+void ItaniumMangleContextImpl::diagnoseUnsupportedHyperobjectRTTI(
+    const HyperobjectType *Type) {
+  Expr *Callback = Type->getIdentity();
+  if (HyperobjectType::isNullish(Callback))
+    Callback = Type->getReduce();
+  if (HyperobjectType::isNullish(Callback) ||
+      !DiagnosedHyperobjectRTTI.insert(Type).second)
+    return;
+
+  DiagnosticsEngine &Diags = getDiags();
+  unsigned DiagID = Diags.getCustomDiagID(
+      DiagnosticsEngine::Error,
+      "RTTI for hyperobject types with reducer callbacks is unsupported");
+  Diags.Report(Callback->getExprLoc(), DiagID);
 }
 
 void ItaniumMangleContextImpl::mangleCXXRTTIName(

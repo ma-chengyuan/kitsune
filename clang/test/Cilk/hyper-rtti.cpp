@@ -17,6 +17,11 @@ const std::type_info &class_hyperobject_pointer() {
   return typeid(ClassHyperobjectPtr);
 }
 
+void identity(void *);
+void reduce(void *, void *);
+using ReducerPtr = int _Hyperobject(identity, reduce) *;
+void accept_reducer(ReducerPtr) {}
+
 // CHECK-DAG: @_ZTIHi = {{.*}}constant { ptr, ptr } { ptr getelementptr inbounds (ptr, ptr @_ZTVN10__cxxabiv123__fundamental_type_infoE, i64 2), ptr @_ZTSHi }
 // CHECK-DAG: @_ZTIPHi = {{.*}}constant { ptr, ptr, i32, ptr } { ptr getelementptr inbounds (ptr, ptr @_ZTVN10__cxxabiv119__pointer_type_infoE, i64 2), ptr @_ZTSPHi, i32 0, ptr @_ZTIHi }
 // CHECK-DAG: @_ZTIH7Derived = {{.*}}constant { ptr, ptr } { ptr getelementptr inbounds (ptr, ptr @_ZTVN10__cxxabiv123__fundamental_type_infoE, i64 2), ptr @_ZTSH7Derived }
@@ -26,3 +31,4 @@ const std::type_info &class_hyperobject_pointer() {
 // CHECK: ret ptr @_ZTIPHi
 // CHECK-LABEL: define {{.*}}@_Z25class_hyperobject_pointerv(
 // CHECK: ret ptr @_ZTIPH7Derived
+// CHECK-LABEL: define {{.*}}@_Z14accept_reducerPHi(

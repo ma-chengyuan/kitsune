@@ -25,6 +25,15 @@ GCC extensions.  Please see the `GCC manual
 <https://gcc.gnu.org/onlinedocs/gcc/C-Extensions.html>`_ for more information on
 these extensions.
 
+OpenCilk hyperobject RTTI
+=========================
+
+On Itanium C++ ABI targets, Clang supports RTTI for callback-free OpenCilk
+hyperobject types, such as pointers to ``int _Hyperobject``. When a type needs
+an RTTI descriptor for ``typeid`` or exception handling, Clang diagnoses reducer
+callbacks anywhere in the type's mangled name. Existing function symbols keep
+the same mangling for hyperobject types.
+
 .. _langext-feature_check:
 
 Feature Checking Macros
