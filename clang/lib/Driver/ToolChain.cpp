@@ -1889,9 +1889,18 @@ void ToolChain::AddKitsuneLinkerArgs(const ArgList &Args,
       // Link the opencilk runtime.  We do this after linking the personality
       // function, to ensure that symbols are resolved correctly when using
       // static linking.
+      // Zera's kitrt uses Cheetah's reducer API even if no object file
+      // references Cheetah directly. Keep it before the later kitrt input
+      // without letting --as-needed drop it.
+      if (IsZera) {
+        CmdArgs.push_back("--push-state");
+        CmdArgs.push_back("--no-as-needed");
+      }
       CmdArgs.push_back(Args.MakeArgString(getOpenCilkRT(
           Args, UseAsan ? "opencilk-asan" : "opencilk",
           StaticOpenCilk ? ToolChain::FT_Static : ToolChain::FT_Shared)));
+      if (IsZera)
+        CmdArgs.push_back("--pop-state");
 
       // Add to the executable's runpath the default directory containing
       // OpenCilk runtime.

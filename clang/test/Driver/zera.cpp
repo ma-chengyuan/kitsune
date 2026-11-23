@@ -38,9 +38,10 @@
 // SOURCE: "-cc1"
 // SOURCE-SAME: "-debug-info-kind=constructor"
 // SOURCE-SAME: "-O2"
+// AS-NEEDED: "--as-needed"
 // LINK: "{{[^"]*}}/existing.o"
 // LINK-SAME: "[[LIBDIR:[^"]*]]/x86_64-unknown-linux-gnu/libopencilk-personality-cpp.so"
-// LINK-SAME: "[[LIBDIR]]/x86_64-unknown-linux-gnu/libopencilk.so"
+// LINK-SAME: "--push-state" "--no-as-needed" "[[LIBDIR]]/x86_64-unknown-linux-gnu/libopencilk.so" "--pop-state"
 // LINK-SAME: "-rpath" "[[LIBDIR]]/x86_64-unknown-linux-gnu"
 // LINK-SAME: "--push-state" "--whole-archive" "[[LIBDIR]]/libzera_alloc.a" "--pop-state"
 // LINK-SAME: "[[LIBDIR]]/libkitrt.so"
@@ -51,7 +52,7 @@
 // RUN: rm %t/relocated/lib/kitcuda.bc
 // RUN: %clangxx --target=x86_64-unknown-linux-gnu -### -fzera -O0 \
 // RUN:   -resource-dir %t/relocated --cuda-path=%t/cuda -Wl,--as-needed %t/existing.o 2>&1 \
-// RUN:   | FileCheck %s --check-prefix=LINK --implicit-check-not='error:' --implicit-check-not=-cc1
+// RUN:   | FileCheck %s --check-prefixes=AS-NEEDED,LINK --implicit-check-not='error:' --implicit-check-not=-cc1
 
 // RUN: %clangxx --target=x86_64-unknown-linux-gnu -fzera -E -dM \
 // RUN:   -resource-dir %t/absent %s | FileCheck %s --check-prefix=CILK
