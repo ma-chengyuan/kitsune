@@ -4146,7 +4146,7 @@ def TapirDeferredSync : StmtAttr {
 def TapirGrainSize : StmtAttr {
   let Spellings = [CXX11<"tapir","grain_size">];
   let Subjects = SubjectList<[CilkForStmt, CilkForRangeStmt], ErrorDiag, "'parallel for' statements">;
-  let Args = [UnsignedArgument<"GrainSize">];
+  let Args = [ExprArgument<"GrainSize">];
   let Documentation = [TapirGrainSizeDocs];
 }
 

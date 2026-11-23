@@ -35,7 +35,6 @@ static void EmitDeclInit(CodeGenFunction &CGF, const VarDecl &D,
   assert(!D.getType()->isReferenceType() &&
          "Should not call EmitDeclInit on a reference!");
 
-  // A zero-initialized reducer still needs dynamic registration.
   const Expr *Init = D.getInit();
   if (!Init)
     return;

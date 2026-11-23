@@ -41,3 +41,18 @@ void foo() {
 // CHECK: [[PFOR_INC]]:
 
 // CHECK: sync within %[[SYNCREG]], label %[[SYNC_CONT:.+]]
+
+template <int Increment> void iterate_array(int (*array)[32]) {
+  _Cilk_for (int &entry : *array) // expected-warning {{'cilk_for' support for for-range loops is currently experimental}}
+    entry += Increment;
+}
+
+template void iterate_array<8>(int (*)[32]);
+
+// CHECK-LABEL: define {{.*}}void @_Z13iterate_arrayILi8EEvPA32_i(
+// CHECK: detach within %{{.*}}, label %[[ARRAY_BODY:[^,]+]], label %{{.*}}
+// CHECK: [[ARRAY_BODY]]:
+// CHECK: %[[LOCAL_INDEX:.*]] = alloca i64
+// CHECK: %[[INDEX:.*]] = load i64, ptr %[[LOCAL_INDEX]]
+// CHECK: getelementptr inbounds i32, ptr %{{.*}}, i64 %[[INDEX]]
+// CHECK: add nsw i32 %{{.*}}, 8

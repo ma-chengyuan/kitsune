@@ -1972,8 +1972,15 @@ class ComplexTypeLoc : public InheritingConcreteTypeLoc<TypeSpecTypeLoc,
                                                         ComplexType> {
 };
 
-class HyperobjectTypeLoc :
-    public PointerLikeTypeLoc<HyperobjectTypeLoc, HyperobjectType> {
+// The semantic type can be shared by declarations with the same callbacks.
+struct HyperobjectLocInfo : PointerLikeLocInfo {
+  Expr *Identity;
+  Expr *Reduce;
+};
+
+class HyperobjectTypeLoc
+    : public PointerLikeTypeLoc<HyperobjectTypeLoc, HyperobjectType,
+                                HyperobjectLocInfo> {
 public:
   SourceLocation getHyperLoc() const {
     return getSigilLoc();
@@ -1983,8 +1990,16 @@ public:
     setSigilLoc(Loc);
   }
 
+  Expr *getIdentityExpr() const { return getLocalData()->Identity; }
+  Expr *getReduceExpr() const { return getLocalData()->Reduce; }
+  void setCallbackExprs(Expr *Identity, Expr *Reduce) {
+    getLocalData()->Identity = Identity;
+    getLocalData()->Reduce = Reduce;
+  }
+
   void initializeLocal(ASTContext &Context, SourceLocation Loc) {
     setSigilLoc(Loc);
+    setCallbackExprs(nullptr, nullptr);
   }
 
   QualType getInnerType() const {

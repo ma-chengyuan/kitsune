@@ -11039,6 +11039,8 @@ public:
                              const AttributeCommonInfo &A);
 
   CodeAlignAttr *BuildCodeAlignAttr(const AttributeCommonInfo &CI, Expr *E);
+  TapirGrainSizeAttr *BuildTapirGrainSizeAttr(const AttributeCommonInfo &CI,
+                                            Expr *E);
   bool CheckRebuiltStmtAttributes(ArrayRef<const Attr *> Attrs);
 
   /// Process the attributes before creating an attributed statement. Returns

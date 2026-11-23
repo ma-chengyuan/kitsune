@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -std=c++17 -verify -verify-ignore-unexpected=note %s
+// RUN: %clang_cc1 -std=c++17 -fopencilk -verify -verify-ignore-unexpected=note %s
 
 namespace StdMock {
 template <class T>

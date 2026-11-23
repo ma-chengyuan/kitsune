@@ -6800,6 +6800,9 @@ void TypeLocReader::VisitComplexTypeLoc(ComplexTypeLoc TL) {
 
 void TypeLocReader::VisitHyperobjectTypeLoc(HyperobjectTypeLoc TL) {
   TL.setHyperLoc(readSourceLocation());
+  Expr *Identity = Reader.readExpr();
+  Expr *Reduce = Reader.readExpr();
+  TL.setCallbackExprs(Identity, Reduce);
 }
 
 void TypeLocReader::VisitPointerTypeLoc(PointerTypeLoc TL) {

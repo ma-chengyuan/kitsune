@@ -6383,6 +6383,7 @@ namespace {
     }
     void VisitHyperobjectTypeLoc(HyperobjectTypeLoc TL) {
       TL.setHyperLoc(Chunk.Loc);
+      TL.setCallbackExprs(Chunk.Hyper.Arg[0], Chunk.Hyper.Arg[1]);
     }
 
     void VisitTypeLoc(TypeLoc TL) {

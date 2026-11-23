@@ -31,6 +31,7 @@
 #include "clang/AST/OpenACCClause.h"
 #include "clang/AST/OpenMPClause.h"
 #include "clang/AST/OperationKinds.h"
+#include "clang/AST/StmtCilk.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticCategories.h"
@@ -933,6 +934,10 @@ bool CursorVisitor::VisitFieldDecl(FieldDecl *D) {
 bool CursorVisitor::VisitVarDecl(VarDecl *D) {
   if (VisitDeclaratorDecl(D))
     return true;
+  // The enclosing Cilk loop visits the initializer as written. This declaration
+  // holds the per-iteration value synthesized by Sema.
+  if (D->isSimpleCilkForLVDecl())
+    return false;
 
   if (Expr *Init = D->getInit())
     return Visit(MakeCXCursor(Init, StmtParent, TU, RegionOfInterest));
@@ -1745,6 +1750,15 @@ bool CursorVisitor::VisitMacroQualifiedTypeLoc(MacroQualifiedTypeLoc TL) {
   return Visit(TL.getInnerLoc());
 }
 
+bool CursorVisitor::VisitHyperobjectTypeLoc(HyperobjectTypeLoc TL) {
+  if (Visit(TL.getPointeeLoc()))
+    return true;
+  for (const Expr *Callback : {TL.getIdentityExpr(), TL.getReduceExpr()})
+    if (Callback && Visit(MakeCXCursor(Callback, StmtParent, TU, RegionOfInterest)))
+      return true;
+  return false;
+}
+
 bool CursorVisitor::VisitPointerTypeLoc(PointerTypeLoc TL) {
   return Visit(TL.getPointeeLoc());
 }
@@ -1918,7 +1932,6 @@ bool CursorVisitor::VisitPipeTypeLoc(PipeTypeLoc TL) {
   }
 
 DEFAULT_TYPELOC_IMPL(Complex, Type)
-DEFAULT_TYPELOC_IMPL(Hyperobject, Type)
 DEFAULT_TYPELOC_IMPL(ConstantArray, ArrayType)
 DEFAULT_TYPELOC_IMPL(IncompleteArray, ArrayType)
 DEFAULT_TYPELOC_IMPL(VariableArray, ArrayType)
@@ -2142,6 +2155,8 @@ public:
   void VisitCXXUuidofExpr(const CXXUuidofExpr *E);
   void VisitCXXCatchStmt(const CXXCatchStmt *S);
   void VisitCXXForRangeStmt(const CXXForRangeStmt *S);
+  void VisitCilkForStmt(const CilkForStmt *S);
+  void VisitCilkForRangeStmt(const CilkForRangeStmt *S);
   void VisitDeclRefExpr(const DeclRefExpr *D);
   void VisitDeclStmt(const DeclStmt *S);
   void VisitDependentScopeDeclRefExpr(const DependentScopeDeclRefExpr *E);
@@ -2988,6 +3003,23 @@ void EnqueueVisitor::VisitCXXUuidofExpr(const CXXUuidofExpr *E) {
 void EnqueueVisitor::VisitCXXCatchStmt(const CXXCatchStmt *S) {
   EnqueueChildren(S);
   AddDecl(S->getExceptionDecl());
+}
+
+void EnqueueVisitor::VisitCilkForStmt(const CilkForStmt *S) {
+  AddStmt(S->getBody());
+  AddStmt(S->getOriginalInc());
+  AddStmt(S->getOriginalCond());
+  if (S->getLoopVarStmt()) {
+    AddStmt(S->getOriginalInit());
+    AddDecl(S->getLoopVariable());
+  } else {
+    AddStmt(S->getInit());
+  }
+}
+
+void EnqueueVisitor::VisitCilkForRangeStmt(const CilkForRangeStmt *S) {
+  VisitCXXForRangeStmt(S->getCXXForRangeStmt());
+  AddStmt(S->getCXXForRangeStmt()->getInit());
 }
 
 void EnqueueVisitor::VisitCXXForRangeStmt(const CXXForRangeStmt *S) {

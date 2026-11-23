@@ -1529,6 +1529,8 @@ namespace {
     TransformStmtAlwaysInlineAttr(const Stmt *OrigS, const Stmt *InstS,
                                   const AlwaysInlineAttr *A);
     const CodeAlignAttr *TransformCodeAlignAttr(const CodeAlignAttr *CA);
+    const TapirGrainSizeAttr *
+    TransformTapirGrainSizeAttr(const TapirGrainSizeAttr *A);
     ExprResult TransformPredefinedExpr(PredefinedExpr *E);
     ExprResult TransformDeclRefExpr(DeclRefExpr *E);
     ExprResult TransformCXXDefaultArgExpr(CXXDefaultArgExpr *E);
@@ -2163,6 +2165,16 @@ const CodeAlignAttr *
 TemplateInstantiator::TransformCodeAlignAttr(const CodeAlignAttr *CA) {
   Expr *TransformedExpr = getDerived().TransformExpr(CA->getAlignment()).get();
   return getSema().BuildCodeAlignAttr(*CA, TransformedExpr);
+}
+
+const TapirGrainSizeAttr *
+TemplateInstantiator::TransformTapirGrainSizeAttr(const TapirGrainSizeAttr *A) {
+  ExprResult Res = getDerived().TransformExpr(A->getGrainSize());
+  if (Res.isInvalid())
+    return nullptr;
+  if (Res.get() == A->getGrainSize())
+    return A;
+  return getSema().BuildTapirGrainSizeAttr(*A, Res.get());
 }
 
 ExprResult TemplateInstantiator::transformNonTypeTemplateParmRef(

@@ -5443,9 +5443,10 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
       !IsDefinitionAvailableExternally &&
       (D->needsDestruction(getContext()) == QualType::DK_cxx_destructor ||
        D->needsDestruction(getContext()) == QualType::DK_hyperobject);
-  NeedsGlobalCtor =
-      !IsDefinitionAvailableExternally &&
-      D->needsDestruction(getContext()) == QualType::DK_hyperobject;
+  // A reducer requires runtime registration even if it is initialized
+  // statically.
+  bool NeedsReducerRegistration =
+      !IsDefinitionAvailableExternally && D->isReducer();
 
   // It is helpless to emit the definition for an available_externally variable
   // which can't be marked as const.
@@ -5521,8 +5522,9 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
       Init = Initializer;
       // We don't need an initializer, so remove the entry for the delayed
       // initializer position (just in case this entry was delayed) if we
-      // also don't need to register a destructor.
-      if (getLangOpts().CPlusPlus && !NeedsGlobalDtor)
+      // also don't need to register a reducer or a destructor.
+      if (getLangOpts().CPlusPlus && !NeedsGlobalDtor &&
+          !NeedsReducerRegistration)
         DelayedCXXInitPosition.erase(D);
 
 #ifndef NDEBUG
@@ -5610,6 +5612,7 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
 
   // If it is safe to mark the global 'constant', do so now.
   GV->setConstant(!NeedsGlobalCtor && !NeedsGlobalDtor &&
+                  !NeedsReducerRegistration &&
                   D->getType().isConstantStorage(getContext(), true, true));
 
   // If it is in a read-only section, mark it 'constant'.
@@ -5676,7 +5679,7 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
   maybeSetTrivialComdat(*D, *GV);
 
   // Emit the initializer function if necessary.
-  if (NeedsGlobalCtor || NeedsGlobalDtor)
+  if (NeedsGlobalCtor || NeedsGlobalDtor || NeedsReducerRegistration)
     EmitCXXGlobalVarDeclInitFunc(D, GV, NeedsGlobalCtor);
 
   SanitizerMD->reportGlobal(GV, *D, NeedsGlobalCtor);

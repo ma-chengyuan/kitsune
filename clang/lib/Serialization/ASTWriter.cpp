@@ -340,7 +340,9 @@ void TypeLocWriter::VisitComplexTypeLoc(ComplexTypeLoc TL) {
 }
 
 void TypeLocWriter::VisitHyperobjectTypeLoc(HyperobjectTypeLoc TL) {
-  Record.AddSourceLocation(TL.getHyperLoc());
+  addSourceLocation(TL.getHyperLoc());
+  Record.AddStmt(TL.getIdentityExpr());
+  Record.AddStmt(TL.getReduceExpr());
 }
 
 void TypeLocWriter::VisitPointerTypeLoc(PointerTypeLoc TL) {

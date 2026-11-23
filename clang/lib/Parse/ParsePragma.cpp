@@ -535,10 +535,10 @@ void Parser::initializePragmaHandlers() {
     PP.AddPragmaHandler("clang", CUDAForceHostDeviceHandler.get());
   }
 
-  // if (getLangOpts().Cilk) {
+  if (getLangOpts().getCilk() != LangOptions::Cilk_none) {
     CilkHintHandler = std::make_unique<PragmaCilkHintHandler>();
     PP.AddPragmaHandler(CilkHintHandler.get());
-  // }
+  }
 
   OptimizeHandler = std::make_unique<PragmaOptimizeHandler>(Actions);
   PP.AddPragmaHandler("clang", OptimizeHandler.get());
@@ -662,10 +662,10 @@ void Parser::resetPragmaHandlers() {
     CUDAForceHostDeviceHandler.reset();
   }
 
-  // if (getLangOpts().Cilk) {
+  if (CilkHintHandler) {
     PP.RemovePragmaHandler(CilkHintHandler.get());
     CilkHintHandler.reset();
-  // }
+  }
 
   PP.RemovePragmaHandler("STDC", FPContractHandler.get());
   FPContractHandler.reset();

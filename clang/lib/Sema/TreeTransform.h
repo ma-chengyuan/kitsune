@@ -5394,8 +5394,10 @@ TreeTransform<Derived>::TransformHyperobjectType(TypeLocBuilder &TLB,
     const HyperobjectType *H = TL.getTypePtr();
     EnterExpressionEvaluationContext Context(
         SemaRef, Sema::ExpressionEvaluationContext::PotentiallyEvaluated);
-    NewR = getDerived().TransformExpr(H->getReduce());
-    NewI = getDerived().TransformExpr(H->getIdentity());
+    NewR = getDerived().TransformExpr(TL.getReduceExpr() ? TL.getReduceExpr()
+                                                         : H->getReduce());
+    NewI = getDerived().TransformExpr(TL.getIdentityExpr() ? TL.getIdentityExpr()
+                                                           : H->getIdentity());
   }
   if (NewR.isInvalid() || NewI.isInvalid())
     return QualType();
@@ -5412,6 +5414,8 @@ TreeTransform<Derived>::TransformHyperobjectType(TypeLocBuilder &TLB,
 
   HyperobjectTypeLoc NewT = TLB.push<HyperobjectTypeLoc>(Result);
   NewT.setHyperLoc(TL.getHyperLoc());
+  NewT.setCallbackExprs(TL.getIdentityExpr() ? NewI.get() : nullptr,
+                        TL.getReduceExpr() ? NewR.get() : nullptr);
   return Result;
 }
 
@@ -16982,9 +16986,41 @@ TreeTransform<Derived>::TransformCilkForStmt(CilkForStmt *S) {
 template<typename Derived>
 StmtResult
 TreeTransform<Derived>::TransformCilkForRangeStmt(CilkForRangeStmt *S) {
+  StmtResult LoopIndex, LocalLoopIndex;
+  if (S->getLoopIndexStmt()) {
+    // The wrapped range loop's variable initializer refers to the local Cilk
+    // index. Instantiate both index declarations before transforming it.
+    LoopIndex = getDerived().TransformStmt(S->getLoopIndexStmt());
+    if (LoopIndex.isInvalid())
+      return StmtError();
+    LocalLoopIndex = getDerived().TransformStmt(S->getLocalLoopIndexStmt());
+    if (LocalLoopIndex.isInvalid())
+      return StmtError();
+  }
+
   StmtResult ForRange = getDerived().TransformStmt(S->getCXXForRangeStmt());
   if (ForRange.isInvalid())
     return StmtError();
+
+  if (LoopIndex.isUsable()) {
+    // The limit initializer refers to the transformed begin and end iterators.
+    StmtResult Limit = getDerived().TransformStmt(S->getLimitStmt());
+    if (Limit.isInvalid())
+      return StmtError();
+    ExprResult Cond = getDerived().TransformExpr(S->getCond());
+    if (Cond.isInvalid())
+      return StmtError();
+    ExprResult Inc = getDerived().TransformExpr(S->getInc());
+    if (Inc.isInvalid())
+      return StmtError();
+
+    auto *IndexStmt = cast<DeclStmt>(LoopIndex.get());
+    return new (getSema().Context) CilkForRangeStmt(
+        getSema().Context, cast<CXXForRangeStmt>(ForRange.get()),
+        cast<VarDecl>(IndexStmt->getSingleDecl()),
+        cast<DeclStmt>(LocalLoopIndex.get()), cast<DeclStmt>(Limit.get()),
+        Cond.get(), Inc.get(), IndexStmt);
+  }
 
   StmtResult CilkForRange =
       getDerived().RebuildCilkForRangeStmt(ForRange.get());

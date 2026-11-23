@@ -3863,17 +3863,12 @@ void ItaniumRTTIBuilder::BuildVTablePointer(const Type *Ty) {
   case Type::ConstantMatrix:
   case Type::Complex:
   case Type::Atomic:
+  case Type::Hyperobject:
   // FIXME: GCC treats block pointers as fundamental types?!
   case Type::BlockPointer:
     // abi::__fundamental_type_info.
     VTableName = "_ZTVN10__cxxabiv123__fundamental_type_infoE";
     break;
-
-  case Type::Hyperobject:
-    // XXX needs work
-    BuildVTablePointer
-      (cast<HyperobjectType>(Ty)->getElementType().getTypePtr());
-    return;
 
   case Type::ConstantArray:
   case Type::IncompleteArray:
@@ -4128,6 +4123,7 @@ llvm::Constant *ItaniumRTTIBuilder::BuildTypeInfo(
   case Type::ConstantMatrix:
   case Type::Complex:
   case Type::BlockPointer:
+  case Type::Hyperobject:
     // Itanium C++ ABI 2.9.5p4:
     // abi::__fundamental_type_info adds no data members to std::type_info.
     break;
@@ -4139,9 +4135,6 @@ llvm::Constant *ItaniumRTTIBuilder::BuildTypeInfo(
   case Type::Auto:
   case Type::DeducedTemplateSpecialization:
     llvm_unreachable("Undeduced type shouldn't get here");
-
-  case Type::Hyperobject:
-    llvm_unreachable("Hyperobject shouldn't get here");
 
   case Type::Pipe:
     break;

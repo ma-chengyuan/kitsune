@@ -532,8 +532,16 @@ void CodeGenFunction::EmitCilkForRangeStmt(const CilkForRangeStmt &S,
   EmitBlock(InitialEntryBlock);
   llvm::Value *InitialBoolCondVal = EvaluateExprAsBool(S.getCond());
 
-  Builder.CreateCondBr(InitialBoolCondVal, Continue.getBlock(),
-                       LoopExit.getBlock());
+  // An empty range still needs to destroy its loop-scope objects. Route the
+  // zero-trip exit through those cleanups before adding the loop's sync.
+  llvm::BasicBlock *InitialExitBlock =
+      ForScope.requiresCleanups() ? createBasicBlock("pfor.initial.cleanup")
+                                 : ExitBlock;
+  Builder.CreateCondBr(InitialBoolCondVal, CondBlock, InitialExitBlock);
+  if (InitialExitBlock != ExitBlock) {
+    EmitBlock(InitialExitBlock);
+    EmitBranchThroughCleanup(LoopExit);
+  }
 
   EmitBlock(CondBlock);
   Expr::EvalResult Result;
@@ -887,7 +895,9 @@ void CodeGenFunction::SetCilkLoopHints(ArrayRef<const Attr *> Attrs) {
     if (isa<TapirDeferredSyncAttr>(A))
       LoopStack.setDeferredSync();
     else if (const auto *GrainSize = dyn_cast<TapirGrainSizeAttr>(A))
-      LoopStack.setTapirGrainSize(GrainSize->getGrainSize());
+      LoopStack.setTapirGrainSize(GrainSize->getGrainSize()
+                                     ->EvaluateKnownConstInt(getContext())
+                                     .getZExtValue());
   }
 }
 
