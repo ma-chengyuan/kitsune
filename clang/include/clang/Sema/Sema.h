@@ -32,6 +32,7 @@
 #include "clang/AST/NSAPI.h"
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/StmtCXX.h"
+#include "clang/AST/StmtCilk.h"
 #include "clang/AST/StmtKitsune.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/AST/TypeOrdering.h"
@@ -6764,6 +6765,9 @@ public:
                    SourceLocation TemplateKWLoc = SourceLocation(),
                    const TemplateArgumentListInfo *TemplateArgs = nullptr);
 
+  Expr *BuildHyperobjectLookup(Expr *, bool Pointer = false);
+  Expr *ValidateReducerCallback(Expr *E, unsigned NumArgs, SourceLocation Loc);
+
   bool UseArgumentDependentLookup(const CXXScopeSpec &SS, const LookupResult &R,
                                   bool HasTrailingLParen);
 
@@ -10871,6 +10875,42 @@ public:
                                   const NamedReturnInfo &NRInfo, Expr *Value,
                                   bool SupressSimplerImplicitMoves = false);
 
+  void DiagnoseCilkSpawn(Stmt *S);
+  StmtResult ActOnCilkScopeStmt(SourceLocation ScopeLoc, Stmt *S);
+  StmtResult ActOnCilkSyncStmt(SourceLocation SyncLoc);
+  StmtResult ActOnCilkSpawnStmt(SourceLocation SpawnLoc, Stmt *S);
+  ExprResult ActOnCilkSpawnExpr(SourceLocation SpawnLoc, Expr *E);
+  StmtResult HandleSimpleCilkForStmt(SourceLocation CilkForLoc,
+                                     SourceLocation LParenLoc,
+                                     Stmt *First,
+                                     Expr *Condition,
+                                     Expr *Increment,
+                                     SourceLocation RParenLoc,
+                                     Stmt *Body);
+  StmtResult LiftCilkForLoopLimit(SourceLocation CilkForLoc,
+                                  Stmt *First, Expr **Second);
+  StmtResult ActOnCilkForStmt(SourceLocation CilkForLoc,
+                              SourceLocation LParenLoc, Stmt *Init,
+                              DeclStmt *Limit, ConditionResult InitCond,
+                              DeclStmt *Begin, DeclStmt *End,
+                              ConditionResult second, FullExprArg third,
+                              SourceLocation RParenLoc, Stmt *Body,
+                              DeclStmt *LoopVar = nullptr,
+                              Expr *OgCond = nullptr, Expr *OgInc = nullptr);
+  StmtResult ActOnCilkForRangeStmt(Scope *S, SourceLocation ForLoc,
+                                   Stmt *InitStmt, Stmt *First,
+                                   SourceLocation ColonLoc, Expr *Range,
+                                   SourceLocation RParenLoc,
+                                   BuildForRangeKind Kind);
+  StmtResult BuildCilkForRangeStmt(CXXForRangeStmt *S);
+  StmtResult FinishCilkForRangeStmt(Stmt *S, Stmt *B);
+  StmtResult BuildCilkForStmt(SourceLocation CilkForLoc,
+                              SourceLocation LParenLoc,
+                              Stmt *Init, Expr *Cond, Expr *Inc,
+                              SourceLocation RParenLoc, Stmt *Body,
+                              Expr *LoopCount, Expr *Stride,
+                              QualType SpanType);
+
   TypeLoc getReturnTypeLoc(FunctionDecl *FD) const;
 
   /// Deduce the return type for a function from a returned expression, per
@@ -14626,6 +14666,8 @@ public:
                               SourceLocation AttrLoc);
   QualType BuildMatrixType(QualType T, Expr *NumRows, Expr *NumColumns,
                            SourceLocation AttrLoc);
+  QualType BuildHyperobjectType(QualType Element, Expr *Identity, Expr *Reduce,
+                                SourceLocation Loc);
 
   QualType BuildCountAttributedArrayOrPointerType(QualType WrappedTy,
                                                   Expr *CountExpr,

@@ -74,6 +74,8 @@ const CXXRecordDecl *Expr::getBestDynamicClassType() const {
   if (DerivedType->isDependentType())
     return nullptr;
 
+  DerivedType = DerivedType.stripHyperobject();
+
   const RecordType *Ty = DerivedType->castAs<RecordType>();
   Decl *D = Ty->getDecl();
   return cast<CXXRecordDecl>(D);
@@ -3711,6 +3713,7 @@ bool Expr::HasSideEffects(const ASTContext &Ctx,
   case ConvertVectorExprClass:
   case AsTypeExprClass:
   case CXXParenListInitExprClass:
+  case CilkSpawnExprClass:
     // These have a side-effect if any subexpression does.
     break;
 

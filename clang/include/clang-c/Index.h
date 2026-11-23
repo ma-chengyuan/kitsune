@@ -2162,6 +2162,30 @@ enum CXCursorKind {
    */
   CXCursor_OpenACCLoopConstruct = 321,
 
+  /** A _Cilk_spawn statement.
+   */
+  CXCursor_CilkSpawnStmt = 322,
+
+  /** Wrapper for an expression preceded by _Cilk_spawn.
+   */
+  CXCursor_CilkSpawnExpr = 323,
+
+  /** A _Cilk_sync statement.
+   */
+  CXCursor_CilkSyncStmt = 324,
+
+  /** A _Cilk_for statement.
+   */
+  CXCursor_CilkForStmt = 325,
+
+  /** A _Cilk_scope statement.
+   */
+  CXCursor_CilkScopeStmt = 326,
+
+  /** A _Cilk_for range statement.
+   */
+  CXCursor_CilkForRangeStmt = 327,
+
   /** Kitsune forall statement.
    */
   CXCursor_ForallStmt = 340,
@@ -2990,7 +3014,9 @@ enum CXTypeKind {
 
   CXType_ExtVector = 176,
   CXType_Atomic = 177,
-  CXType_BTFTagAttributed = 178
+  CXType_BTFTagAttributed = 178,
+
+  CXType_Hyperobject = 179
 };
 
 /**

@@ -3482,6 +3482,60 @@ QualType QualType::getNonLValueExprType(const ASTContext &Context) const {
   return *this;
 }
 
+QualType QualType::stripHyperobject() const {
+  if (const auto *Hyperobject = getTypePtr()->getAs<HyperobjectType>())
+    return Hyperobject->getElementType().withFastQualifiers(
+        getLocalFastQualifiers());
+  return *this;
+}
+
+/// Check if the expression is nullptr, 0, or contains an error.
+/// The more general isNullPointerConstant requires a non-const ASTContext.
+bool HyperobjectType::isNullish(Expr *E) {
+  E = E->IgnoreParenCasts();
+  switch (E->getStmtClass()) {
+  case Expr::CXXNullPtrLiteralExprClass:
+    return true;
+  case Expr::IntegerLiteralClass:
+    return cast<IntegerLiteral>(E)->getValue().isZero();
+  case Expr::TypoExprClass:
+    return true;
+  default:
+    return E->getType()->containsErrors();
+  }
+}
+
+HyperobjectType::HyperobjectType(QualType Element, QualType CanonicalPtr,
+                                 Expr *i, const FunctionDecl *ifn,
+                                 Expr *r, const FunctionDecl *rfn)
+  : Type(Hyperobject, CanonicalPtr, Element->getDependence()),
+    ElementType(Element), Identity(i), Reduce(r),
+    IdentityID(ifn), ReduceID(rfn) {
+  if (Element->isIncompleteType()) // diagnosed in caller
+    addDependence(TypeDependence::Error);
+  addDependence(Element->getDependence());
+  addDependence(toTypeDependence(i->getDependence()));
+  addDependence(toTypeDependence(r->getDependence()));
+}
+
+bool HyperobjectType::hasCallbacks() const {
+  return Identity && Reduce && !isNullish(Identity) && !isNullish(Reduce);
+}
+
+void HyperobjectType::Profile(llvm::FoldingSetNodeID &ID) const {
+  Profile(ID, getElementType(), IdentityID, ReduceID);
+}
+
+void HyperobjectType::Profile(llvm::FoldingSetNodeID &ID, QualType Pointee,
+                              const FunctionDecl *I, const FunctionDecl *R) {
+  ID.AddPointer(Pointee.getAsOpaquePtr());
+  // In normal use both I and R will be non-null or neither of them will be.
+  if (I)
+    ID.AddPointer(I);
+  if (R)
+    ID.AddPointer(R);
+}
+
 StringRef FunctionType::getNameForCallConv(CallingConv CC) {
   switch (CC) {
   case CC_C: return "cdecl";
@@ -4096,6 +4150,29 @@ bool RecordType::hasConstFields() const {
   return false;
 }
 
+// This is cut and pasted from hasConstFields.
+bool RecordType::hasHyperobjectFields() const {
+  std::vector<const RecordType*> RecordTypeList;
+  RecordTypeList.push_back(this);
+  unsigned NextToCheckIndex = 0;
+
+  while (RecordTypeList.size() > NextToCheckIndex) {
+    for (FieldDecl *FD :
+         RecordTypeList[NextToCheckIndex]->getDecl()->fields()) {
+      QualType FieldTy = FD->getType();
+      if (FieldTy->isHyperobjectType())
+        return true;
+      FieldTy = FieldTy.getCanonicalType();
+      if (const auto *FieldRecTy = FieldTy->getAs<RecordType>()) {
+        if (llvm::find(RecordTypeList, FieldRecTy) == RecordTypeList.end())
+          RecordTypeList.push_back(FieldRecTy);
+      }
+    }
+    ++NextToCheckIndex;
+  }
+  return false;
+}
+
 bool AttributedType::isQualifier() const {
   // FIXME: Generate this with TableGen.
   switch (getAttrKind()) {
@@ -4523,6 +4600,8 @@ static CachedProperties computeCachedProperties(const Type *T) {
     //     compounded exclusively from types that have linkage; or
   case Type::Complex:
     return Cache::get(cast<ComplexType>(T)->getElementType());
+  case Type::Hyperobject:
+    return Cache::get(cast<HyperobjectType>(T)->getElementType());
   case Type::Pointer:
     return Cache::get(cast<PointerType>(T)->getPointeeType());
   case Type::BlockPointer:
@@ -4611,6 +4690,8 @@ LinkageInfo LinkageComputer::computeTypeLinkageInfo(const Type *T) {
 
   case Type::Complex:
     return computeTypeLinkageInfo(cast<ComplexType>(T)->getElementType());
+  case Type::Hyperobject:
+    return computeTypeLinkageInfo(cast<HyperobjectType>(T)->getElementType());
   case Type::Pointer:
     return computeTypeLinkageInfo(cast<PointerType>(T)->getPointeeType());
   case Type::BlockPointer:
@@ -4809,6 +4890,7 @@ bool Type::canHaveNullability(bool ResultIfUnknown) const {
 
   // Non-pointer types.
   case Type::Complex:
+  case Type::Hyperobject:
   case Type::LValueReference:
   case Type::RValueReference:
   case Type::ConstantArray:
@@ -5024,6 +5106,16 @@ QualType::DestructionKind QualType::isDestructedTypeImpl(QualType type) {
     return DK_objc_strong_lifetime;
   case Qualifiers::OCL_Weak:
     return DK_objc_weak_lifetime;
+  }
+
+  if (const HyperobjectType *HT = type->getAs<HyperobjectType>()) {
+    QualType Inner = HT->getElementType();
+    QualType::DestructionKind DK_Inner = isDestructedTypeImpl(Inner);
+    if (DK_Inner != DK_none)
+      return DK_Inner;
+    if (HT->hasCallbacks())
+      return DK_hyperobject;
+    return DK_none;
   }
 
   if (const auto *RT =

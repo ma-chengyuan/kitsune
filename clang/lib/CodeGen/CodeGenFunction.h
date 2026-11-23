@@ -23,6 +23,7 @@
 #include "VarBypassDetector.h"
 #include "clang/AST/CharUnits.h"
 #include "clang/AST/CurrentSourceLocExprScope.h"
+#include "clang/AST/ExprCilk.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
@@ -1602,7 +1603,7 @@ public:
 
     // Information about a reference temporary created early in the detached
     // block.
-    Address RefTmp = Address::invalid();
+    RawAddress RefTmp = RawAddress::invalid();
     StorageDuration RefTmpSD;
 
     // Optional taskframe created separately from detach.
@@ -1625,6 +1626,8 @@ public:
     ~DetachScope() {
       if (TempInvokeDest && TempInvokeDest->use_empty())
         delete TempInvokeDest;
+      if (TaskFrame && TaskFrame->use_empty())
+        cast<llvm::Instruction>(TaskFrame)->eraseFromParent();
       CGF.CurDetachScope = ParentScope;
     }
 
@@ -1678,8 +1681,8 @@ public:
 
     // Create a temporary for the spawned task, specifically, before the spawned
     // task has started.
-    Address CreateDetachedMemTemp(QualType Ty, StorageDuration SD,
-                                  const Twine &Name = "det.tmp");
+    RawAddress CreateDetachedMemTemp(QualType Ty, StorageDuration SD,
+                                    const Twine &Name = "det.tmp");
   };
 
   /// The current detach scope.
@@ -1743,7 +1746,6 @@ public:
     llvm::BasicBlock *OldEHResumeBlock = nullptr;
     llvm::Value *OldExceptionSlot = nullptr;
     llvm::AllocaInst *OldEHSelectorSlot = nullptr;
-    Address OldNormalCleanupDest = Address::invalid();
 
     // Taskframe created separately from detach.
     llvm::Value *TaskFrame = nullptr;
@@ -1839,7 +1841,7 @@ public:
   /// EmitBranchThroughCleanup - Emit a branch from the current insert
   /// block through the normal cleanup handling code (if any) and then
   /// on to \arg Dest.
-  void EmitBranchThroughCleanup(JumpDest Dest);
+  void EmitBranchThroughCleanup(JumpDest Dest, bool AfterSync = false);
 
   /// isObviouslyBranchWithoutCleanups - Return true if a branch to the
   /// specified destination obviously has no cleanups to run.  'false' is always
@@ -2820,6 +2822,7 @@ public:
     switch (kind) {
     case QualType::DK_none:
       return false;
+    case QualType::DK_hyperobject:
     case QualType::DK_cxx_destructor:
     case QualType::DK_objc_weak_lifetime:
     case QualType::DK_nontrivial_c_struct:
@@ -3759,6 +3762,7 @@ public:
                                   bool ZeroInitialization = false);
 
   static Destroyer destroyCXXObject;
+  static Destroyer destroyHyperobject;
 
   void EmitCXXDestructorCall(const CXXDestructorDecl *D, CXXDtorType Type,
                              bool ForVirtualBase, bool Delegating, Address This,
@@ -4011,6 +4015,14 @@ public:
   void EmitAutoVarCleanups(const AutoVarEmission &emission);
   void emitAutoVarTypeCleanup(const AutoVarEmission &emission,
                               QualType::DestructionKind dtorKind);
+  struct ReducerCallbacks {
+    Expr *Identity;
+    Expr *Reduce;
+  };
+
+  bool getReducer(const DeclaratorDecl *D, ReducerCallbacks &CB);
+  void EmitReducerInit(const DeclaratorDecl *D, const ReducerCallbacks &CB,
+                       llvm::Value *Addr);
 
   /// Emits the alloca and debug information for the size expressions for each
   /// dimension of an array. It registers the association of its (1-dimensional)
@@ -4168,6 +4180,14 @@ public:
                       ArrayRef<const Attr *> Attrs = std::nullopt);
   void EmitCXXForallRangeStmt(const CXXForallRangeStmt &S,
                               ArrayRef<const Attr *> Attrs = std::nullopt);
+  void EmitCilkScopeStmt(const CilkScopeStmt &S);
+  void EmitCilkSpawnStmt(const CilkSpawnStmt &S);
+  void EmitCilkSyncStmt(const CilkSyncStmt &S);
+  void EmitCilkForStmt(const CilkForStmt &S, ArrayRef<const Attr *> Attrs);
+  void EmitCilkForRangeStmt(const CilkForRangeStmt &S,
+                           ArrayRef<const Attr *> Attrs);
+  LValue EmitCilkSpawnExprLValue(const CilkSpawnExpr *E);
+  void SetCilkLoopHints(ArrayRef<const Attr *> Attrs);
 
   void EmitObjCForCollectionStmt(const ObjCForCollectionStmt &S);
   void EmitObjCAtTryStmt(const ObjCAtTryStmt &S);
@@ -4218,7 +4238,7 @@ public:
 
   LoopAttributes::LSStrategy GetTapirStrategyAttr(ArrayRef<const Attr *> Attrs);
   std::optional<llvm::TapirTargetID>
-  GetTapirTargetAttr(ArrayRef<const Attr *> Attrs);
+  GetTapirTargetAttr(ArrayRef<const Attr *> Attrs, bool IsCilkLoop = false);
   llvm::Value *GetKitsuneLaunchAttr(ArrayRef<const Attr *> Attrs);
 
   // Kitsune support for Kokkos.

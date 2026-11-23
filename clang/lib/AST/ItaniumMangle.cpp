@@ -2399,6 +2399,7 @@ bool CXXNameMangler::mangleUnresolvedTypeOrSimpleId(QualType Ty,
   case Type::Decayed:
   case Type::ArrayParameter:
   case Type::Pointer:
+  case Type::Hyperobject:
   case Type::BlockPointer:
   case Type::LValueReference:
   case Type::RValueReference:
@@ -3767,6 +3768,11 @@ void CXXNameMangler::mangleType(const ComplexType *T) {
   mangleType(T->getElementType());
 }
 
+void CXXNameMangler::mangleType(const HyperobjectType *H) {
+  Out << 'H';
+  mangleType(H->getElementType());
+}
+
 // ARM's ABI for Neon vector types specifies that they should be mangled as
 // if they are structs (to match ARM's initial implementation).  The
 // vector type must be one of the special types predefined by ARM.
@@ -4726,6 +4732,7 @@ recurse:
   case Expr::CXXInheritedCtorInitExprClass:
   case Expr::CXXParenListInitExprClass:
   case Expr::PackIndexingExprClass:
+  case Expr::CilkSpawnExprClass:
     llvm_unreachable("unexpected statement kind");
 
   case Expr::ConstantExprClass:

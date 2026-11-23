@@ -4696,7 +4696,7 @@ def err_param_default_argument_on_parameter_pack : Error<
   "parameter pack cannot have a default argument">;
 def err_uninitialized_member_for_assign : Error<
   "cannot define the implicit copy assignment operator for %0, because "
-  "non-static %select{reference|const}1 member %2 cannot use copy "
+  "non-static %select{reference|const|hyperobject}1 member %2 cannot use copy "
   "assignment operator">;
 def err_uninitialized_member_in_ctor : Error<
   "%select{constructor for %1|"
@@ -6006,7 +6006,7 @@ def note_deleted_special_member_class_subobject : Note<
 def note_deleted_default_ctor_uninit_field : Note<
   "%select{default constructor of|constructor inherited by}0 "
   "%1 is implicitly deleted because field %2 of "
-  "%select{reference|const-qualified}4 type %3 would not be initialized">;
+  "%select{reference|const-qualified|reducer}4 type %3 would not be initialized">;
 def note_deleted_default_ctor_all_const : Note<
   "%select{default constructor of|constructor inherited by}0 "
   "%1 is implicitly deleted because all "
@@ -10957,6 +10957,193 @@ def err_incompatible_replacement_type : Error<
 
 } // end of API Notes category
 
+// Cilk Plus warnings and errors
+let CategoryName = "Cilk Issue" in {
+def err_cilk_unevaluated_context : Error<
+  "'%0' cannot be used in an unevaluated context">;
+def err_cilk_outside_function : Error<
+  "'%0' cannot be used outside a function">;
+def err_cilk_spawn_invalid_func_context : Error<
+  "'%1' cannot be used in %select{a constructor|a destructor"
+  "|a copy assignment operator|a move assignment operator|the 'main' function"
+  "|a constexpr function|a function with a deduced return type"
+  "|a varargs function}0">;
+def err_pragma_cilk_precedes_noncilk : Error<
+  "expected a Cilk keyword to follow '%0'">;
+
+// cilk_scope
+def note_protected_by_cilk_scope: Note<
+  "jump bypasses 'cilk_scope'">;
+
+// cilk_spawn
+def err_spawn_invalid_scope : Error<
+  "'cilk_spawn' not allowed in this scope">;
+def err_spawn_invalid_decl : Error<
+  "'cilk_spawn' not supported in a '%0Decl'">;
+def err_spawn_spawn : Error<
+  "consecutive 'cilk_spawn' tokens not allowed">;
+def err_invalid_spawn_expr : Error<
+  "invalid 'cilk_spawn' in expression">;
+def err_cannot_spawn_builtin: Error<
+  "builtin function cannot be spawned">;
+def err_cannot_spawn_function: Error<
+  "function cannot be spawned">;
+def err_cannot_init_static_variable: Error<
+  "cannot spawn initialize a 'static' variable">;
+def err_multiple_spawns: Error<
+  "multiple spawns among call arguments">;
+def note_multiple_spawns: Note<
+  "another spawn here">;
+def note_protected_by_spawn: Note<
+  "jump bypasses 'cilk_spawn'">;
+def note_exits_spawn : Note<
+  "jump exits the scope of a 'cilk_spawn'">;
+def err_jump_out_of_spawn : Error<
+  "cannot jump out of 'cilk_spawn' statement">;
+def err_cilk_spawn_cannot_return: Error<
+  "cannot return from within a 'cilk_spawn' statement">;
+def warn_return_cilk_spawn : Warning<
+  "no parallelism from a 'cilk_spawn' in a return statement">, InGroup<ReturnCilkSpawn>;
+
+// cilk_for
+def err_cilk_for_initializer_expected_variable : Error<
+  "expected a variable for control variable in 'cilk_for'">;
+def err_cilk_for_initializer_expected_decl : Error<
+  "expected control variable declaration in initializer in 'cilk_for'">;
+def err_cilk_for_decl_multiple_variables : Error<
+  "cannot declare more than one loop control variable in 'cilk_for'">;
+def err_cilk_for_init_multiple_variables : Error<
+  "cannot initialize more than one loop control variable in 'cilk_for'">;
+def err_cilk_for_control_variable_not_initialized : Error<
+  "'cilk_for' loop control variable must be initialized">;
+def err_cilk_for_initialization_must_be_decl : Error<
+  "loop initialization must be a declaration in 'cilk_for'">;
+
+def err_cilk_for_control_variable_storage_class : Error<
+  "loop control variable cannot have storage class '%0' in 'cilk_for'">;
+def err_cilk_for_control_variable_qualifier : Error<
+  "loop control variable cannot be '%0' in 'cilk_for'">;
+def err_cilk_for_control_variable_not_local : Error<
+  "non-local loop control variable in 'cilk_for'">;
+def err_cilk_for_control_variable_type : Error<
+  "loop control variable must have an integral, pointer, or class type "
+  "in 'cilk_for'">;
+
+def err_cilk_for_invalid_cond_expr: Error<
+  "expected binary comparison operator in 'cilk_for' loop condition">;
+def err_cilk_for_invalid_cond_operator: Error<
+  "loop condition operator must be one of '<', '<=', '>', '>=', or '!=' "
+  "in 'cilk_for'">;
+def err_cilk_for_cond_test_control_var: Error<
+  "loop condition does not test control variable %0 in 'cilk_for'">;
+def note_cilk_for_cond_allowed: Note<
+  "allowed forms are %0 OP expr, and expr OP %0">;
+def err_cilk_for_difference_ill_formed: Error<
+  "end - begin must be well-formed in 'cilk_for'">;
+def err_non_integral_cilk_for_difference_type: Error<
+  "end - begin must have integral type in 'cilk_for' - got %0">;
+
+def err_cilk_for_increment_not_control_var: Error<
+  "loop increment does not modify control variable %0 in 'cilk_for'">;
+def err_cilk_for_invalid_increment : Error<
+  "loop increment operator must be one of operators '++', '--', '+=', or '-=' in 'cilk_for'">;
+def err_cilk_for_invalid_increment_rhs : Error<
+  "right-hand side of '%0' must have integral or enum type in 'cilk_for' increment">;
+def err_cilk_for_increment_inconsistent : Error<
+  "loop increment is inconsistent with condition in 'cilk_for': expected %select{negative|positive}0 stride">;
+def err_cilk_for_increment_zero : Error<
+  "loop increment must be non-zero in 'cilk_for'">;
+def err_cilk_for_loop_modifies_control_var : Error<
+  "modifying the loop control variable inside a 'cilk_for' has undefined behavior">;
+def warn_cilk_for_loop_control_var_func : Warning<
+  "modifying the loop control variable inside a 'cilk_for' using a function call has undefined behavior">, InGroup<CilkPlusLoopControlVarModification>, DefaultIgnore;
+def warn_cilk_for_loop_control_var_aliased: Warning<
+  "modifying the loop control variable '%0' through an alias in 'cilk_for' has undefined behavior">, InGroup<CilkPlusLoopControlVarModification>, DefaultIgnore;
+def note_cilk_for_loop_control_var_declared_here: Note<
+  "'cilk_for' loop control variable declared here">;
+def warn_empty_cilk_for_body : Warning<
+  "'cilk_for' loop has empty body">, InGroup<EmptyBody>;
+
+def note_constant_stride: Note<
+  "constant stride is %0">;
+def warn_cilk_for_cond_user_defined_conv: Warning<
+  "user-defined conversion from %0 to %1 will not be used when calculating the "
+  "number of iterations in 'cilk_for'">, InGroup<Conversion>, DefaultWarn;
+def note_cilk_for_conversion_here : Note<
+  "conversion to type %0 declared here">;
+def err_cilk_for_cannot_return: Error<
+  "cannot return from within a 'cilk_for' loop">;
+def err_cilk_for_cannot_break: Error<
+  "cannot break from a 'cilk_for' loop">;
+def warn_cilk_for_loop_count_downcast: Warning<
+  "implicit loop count downcast from %0 to %1 in 'cilk_for'">,
+  InGroup<Conversion>, DefaultWarn;
+
+def err_cilk_for_grainsize_negative: Error<
+  "the behavior of 'cilk_for' is unspecified for a negative grainsize">;
+def note_cilk_for_grainsize_conversion : Note<
+  "grainsize must evaluate to a type convertible to %0">;
+
+def warn_cilk_for_wraparound: Warning<
+  "%0 stride causes %1 wraparound">, InGroup<SourceUsesCilkPlus>, DefaultWarn;
+
+def note_cilk_for_wraparound_undefined: Note<
+  "wraparounds cause undefined behavior in 'cilk_for'">;
+
+def note_protected_by_cilk_for: Note<
+  "jump bypasses 'cilk_for'">;
+def note_exits_cilk_for : Note<
+  "jump exits the scope of a 'cilk_for'">;
+def err_jump_out_of_cilk_for : Error<
+  "cannot jump out of 'cilk_for' statement">;
+
+def attribute_requires_cilk : Warning<
+  "%0 ignored when OpenCilk not in use">,
+  InGroup<DiagGroup<"required-cilk">>;
+
+def variable_length_hyperobject : Error<
+   "variable length type %0 may not be a hyperobject">;
+
+def confusing_hyperobject : Error<
+   "type %0 may not be a hyperobject">;
+
+def incomplete_hyperobject : Error<
+   "incomplete type %0 may not be a hyperobject">;
+
+def qualified_hyperobject : Error<
+   "qualified type %0 may not be a hyperobject">;
+
+def nested_hyperobject : Error<
+   "type %0, which contains a hyperobject, may not be a hyperobject">;
+
+def reducer_registration_not_implemented: Warning<
+   "reducer registration not implemented for structure members">,
+    InGroup<CilkIgnored>;
+
+def err_invalid_reducer_callback : Error<
+  "reducer callback must be function with %0 pointer parameter%s0"
+>;
+
+def note_protected_by_reducer : Note<
+  "jump bypasses initialization of variable with __attribute__((reducer))">;
+
+def err_hyperobject_param : Error<"parameter is hyperobject">;
+
+def err_hyperobject_cast : Error<"cast to hyperobject">;
+
+def err_hyperobject_struct_assign : Error<
+    "unimplemented assignment to structure with hyperobject member">;
+
+def no_reducer_array : Warning<
+    "array of reducer not implemented">,
+    InGroup<CilkIgnored>;
+
+// cilk for_range
+def err_cilk_for_range_end_minus_begin : Error<
+  "cannot determine length with '__end - __begin'; please use a random access iterator">;
+}
+// end of Cilk category
+
 let CategoryName = "OpenMP Issue" in {
 // OpenMP support.
 def err_omp_expected_var_arg : Error<
@@ -12536,9 +12723,7 @@ def err_acc_loop_spec_conflict
 def err_amdgcn_global_load_lds_size_invalid_value : Error<"invalid size value">;
 def note_amdgcn_global_load_lds_size_valid_value : Note<"size must be 1, 2, or 4">;
 
-// Kitsune
-
-// target attribute
+// Tapir target attribute
 def err_tapir_target_attr_unsupported_stmt: Error<
   "tapir target attribute on unsupported statement">;
 def err_tapir_target_unknown: Error<

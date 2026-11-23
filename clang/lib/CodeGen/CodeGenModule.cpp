@@ -5441,7 +5441,11 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
       getContext().GetGVALinkageForVariable(D) == GVA_AvailableExternally;
   bool NeedsGlobalDtor =
       !IsDefinitionAvailableExternally &&
-      D->needsDestruction(getContext()) == QualType::DK_cxx_destructor;
+      (D->needsDestruction(getContext()) == QualType::DK_cxx_destructor ||
+       D->needsDestruction(getContext()) == QualType::DK_hyperobject);
+  NeedsGlobalCtor =
+      !IsDefinitionAvailableExternally &&
+      D->needsDestruction(getContext()) == QualType::DK_hyperobject;
 
   // It is helpless to emit the definition for an available_externally variable
   // which can't be marked as const.

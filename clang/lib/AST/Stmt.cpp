@@ -18,10 +18,12 @@
 #include "clang/AST/DeclGroup.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/ExprCilk.h"
 #include "clang/AST/ExprConcepts.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
 #include "clang/AST/Stmt.h"
+#include "clang/AST/StmtCilk.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/AST/StmtOpenACC.h"
@@ -1490,3 +1492,43 @@ StringRef SyncStmt::getSyncVar() const {
   return SyncVar;
 }
 
+// CilkForStmt
+CilkForStmt::CilkForStmt(Stmt *Init, DeclStmt *Limit, Expr *InitCond,
+                         DeclStmt *BeginStmt, DeclStmt *EndStmt, Expr *Cond,
+                         Expr *Inc, DeclStmt *LoopVar, Stmt *Body, Expr *OgCond,
+                         Expr *OgInc, SourceLocation CFL, SourceLocation LP,
+                         SourceLocation RP)
+    : Stmt(CilkForStmtClass), CilkForLoc(CFL), LParenLoc(LP), RParenLoc(RP) {
+  SubExprs[INIT] = Init;
+  SubExprs[LIMIT] = Limit;
+  SubExprs[INITCOND] = InitCond;
+  SubExprs[BEGINSTMT] = BeginStmt;
+  SubExprs[ENDSTMT] = EndStmt;
+  SubExprs[COND] = Cond;
+  SubExprs[INC] = Inc;
+  SubExprs[LOOPVAR] = LoopVar;
+  SubExprs[BODY] = Body;
+  SubExprs[OGCOND] = OgCond;
+  SubExprs[OGINC] = OgInc;
+}
+
+VarDecl *CilkForStmt::getLoopVariable() {
+  Decl *LV = cast<DeclStmt>(getLoopVarStmt())->getSingleDecl();
+  assert(LV && "No simple loop variable in CilkForStmt");
+  return cast<VarDecl>(LV);
+}
+
+const VarDecl *CilkForStmt::getLoopVariable() const {
+  return const_cast<CilkForStmt *>(this)->getLoopVariable();
+}
+
+Stmt *CilkForStmt::getOriginalInit() {
+  Decl *IV = cast<DeclStmt>(getInit())->getSingleDecl();
+  if (!IV)
+    return getInit();
+  return cast<VarDecl>(IV)->getInit();
+}
+
+const Stmt *CilkForStmt::getOriginalInit() const {
+  return const_cast<CilkForStmt *>(this)->getOriginalInit();
+}

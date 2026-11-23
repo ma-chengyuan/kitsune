@@ -625,9 +625,25 @@ void CodeGenFunction::EmitCXXTryStmt(const CXXTryStmt &S) {
   // a GPU, we treat it as a basic block.
   const bool IsTargetDevice =
       (CGM.getLangOpts().OpenMPIsTargetDevice && (T.isNVPTX() || T.isAMDGCN()));
+  TaskFrameScope TFScope(*this);
   if (!IsTargetDevice)
     EnterCXXTryStmt(S);
-  EmitStmt(S.getTryBlock());
+  {
+    // If compiling Cilk code, create a nested sync region, with an implicit
+    // sync, for the try-catch.
+    bool CompilingCilk = (getLangOpts().getCilk() != LangOptions::Cilk_none);
+    SyncedScopeRAII SyncedScp(*this);
+    if (CompilingCilk) {
+      PushSyncRegion();
+      if (isa<CompoundStmt>(S.getTryBlock()))
+        ScopeIsSynced = true;
+    }
+    EmitStmt(S.getTryBlock());
+
+    // Pop the nested sync region after the try block.
+    if (CompilingCilk)
+      PopSyncRegion();
+  }
   if (!IsTargetDevice)
     ExitCXXTryStmt(S);
 }

@@ -835,10 +835,15 @@ def err_drv_kitsune_objc : Error<
 def err_drv_kitsune_unsupported: Error<
   "kitsune not yet supported for this target">;
 
+def err_drv_double_cilk : Error<"conflicting Cilk versions">;
+def err_drv_cilk_objc : Error<"Cilk does not support Objective-C">;
+
 // FIXME KITSUNE: Some of this should probably go away since we don't want to
 // give opencilk any special treatment here.
 def err_drv_opencilk_missing_abi_bitcode: Error<
   "cannot find OpenCilk runtime ABI bitcode file: %0">;
+def err_drv_opencilk_missing_runtime : Error<
+  "cannot find OpenCilk runtime library: %0">;
 
 def err_drv_mix_tapir_cuda_hip : Error<
   "mixed Tapir and Cuda/HIP compilation is currently not supported">;

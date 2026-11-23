@@ -23,9 +23,8 @@ class ArgList;
 
 namespace clang {
 
-/// Parse the -ftapir flag if it is present in the arguments. If the flag is
-/// not present, return std::nullopt. If the flag is present and its value is
-/// not a valid Tapir target, return Last_TapirTargetID.
+/// Return the explicit -ftapir target, or OpenCilk for -fopencilk without an
+/// explicit target. Return std::nullopt if no valid target is selected.
 std::optional<llvm::TapirTargetID>
 parseTapirTarget(const llvm::opt::ArgList &Args);
 

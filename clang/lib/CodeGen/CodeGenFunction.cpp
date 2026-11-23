@@ -302,6 +302,10 @@ TypeEvaluationKind CodeGenFunction::getEvaluationKind(QualType type) {
     case Type::Atomic:
       type = cast<AtomicType>(type)->getValueType();
       continue;
+
+    case Type::Hyperobject:
+      type = cast<HyperobjectType>(type)->getElementType();
+      continue;
     }
     llvm_unreachable("unknown type kind!");
   }
@@ -408,6 +412,8 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
   bool HasOnlyLifetimeMarkers =
       HasCleanups && EHStack.containsOnlyLifetimeMarkers(PrologueCleanupDepth);
   bool EmitRetDbgLoc = !HasCleanups || HasOnlyLifetimeMarkers;
+  bool SyncEmitted = false;
+  bool CompilingCilk = (getLangOpts().getCilk() != LangOptions::Cilk_none);
 
   std::optional<ApplyDebugLocation> OAL;
   if (HasCleanups) {
@@ -422,11 +428,28 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
         OAL = ApplyDebugLocation::CreateDefaultArtificial(*this, EndLoc);
     }
 
-    PopCleanupBlocks(PrologueCleanupDepth);
+    // If we're compiling Cilk, PopCleanupBlocks should emit a _Cilk_sync before
+    // any cleanups.
+    PopCleanupBlocks(PrologueCleanupDepth, {}, CompilingCilk);
+    SyncEmitted = true;
+  } else if (CompilingCilk && Builder.GetInsertBlock() &&
+             ReturnBlock.getBlock()->use_empty()) {
+    // If we're compiling Cilk, emit an implicit sync for the function.  In this
+    // case, EmitReturnBlock will recycle Builder.GetInsertBlock() for the
+    // function's return block, so we insert the implicit _Cilk_sync before
+    // calling EmitReturnBlock.
+    EmitImplicitSyncCleanup();
+    SyncEmitted = true;
   }
 
   // Emit function epilog (to return).
   llvm::DebugLoc Loc = EmitReturnBlock();
+
+  if (CompilingCilk && !SyncEmitted) {
+    // If we're compiling Cilk, emit an implicit sync for the function.
+    EmitImplicitSyncCleanup();
+    SyncEmitted = true;
+  }
 
   if (ShouldInstrumentFunction()) {
     if (CGM.getCodeGenOpts().InstrumentFunctions)
@@ -864,6 +887,8 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
       Fn->addFnAttr(llvm::Attribute::SanitizeThread);
     if (SanOpts.has(SanitizerKind::NumericalStability))
       Fn->addFnAttr(llvm::Attribute::SanitizeNumericalStability);
+    if (SanOpts.has(SanitizerKind::Cilk))
+      Fn->addFnAttr(llvm::Attribute::SanitizeCilk);
     if (SanOpts.hasOneOf(SanitizerKind::Memory | SanitizerKind::KernelMemory))
       Fn->addFnAttr(llvm::Attribute::SanitizeMemory);
   }
@@ -1000,6 +1025,17 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
       getContext().getTargetInfo().getTriple().getEnvironment() !=
           llvm::Triple::CODE16)
     Fn->addFnAttr("patchable-function", "prologue-short-redirect");
+
+  // Add Cilk attributes
+  if (D && getLangOpts().getCilk() != LangOptions::Cilk_none) {
+    if (D->getAttr<StrandPureAttr>())
+      Fn->addFnAttr(llvm::Attribute::StrandPure);
+    if (D->getAttr<StealableAttr>())
+      Fn->addFnAttr(llvm::Attribute::Stealable);
+  }
+
+  if (D && D->getAttr<InjectiveAttr>())
+    Fn->addFnAttr(llvm::Attribute::Injective);
 
   // Add no-jump-tables value.
   if (CGM.getCodeGenOpts().NoUseJumpTables)
@@ -2456,6 +2492,10 @@ void CodeGenFunction::EmitVariablyModifiedType(QualType type) {
       type = cast<ArrayType>(ty)->getElementType();
       break;
 
+    case Type::Hyperobject:
+      type = cast<HyperobjectType>(ty)->getElementType();
+      break;
+
     case Type::VariableArray: {
       // Losing element qualification here is fine.
       const VariableArrayType *vat = cast<VariableArrayType>(ty);
@@ -2722,7 +2762,7 @@ void CodeGenFunction::DetachScope::StartLabeledDetach(SyncRegion *SR) {
     case SD_FullExpression:
       if (auto *Size = CGF.EmitLifetimeStart(
               CGF.CGM.getDataLayout().getTypeAllocSize(RefTmp.getElementType()),
-              RefTmp.getBasePointer())) {
+              RefTmp.getPointer())) {
         if (RefTmpSD == SD_Automatic)
           CGF.pushCleanupAfterFullExpr<CallLifetimeEnd>(NormalEHLifetimeMarker,
                                                         RefTmp, Size);

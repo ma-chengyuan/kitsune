@@ -123,7 +123,7 @@ using namespace clang;
 /// [C++]   throw-expression [C++ 15]
 ///
 ///       assignment-operator: one of
-///         = *= /= %= += -= <<= >>= &= ^= |=
+///         = *= /= %= += -= <<= >>= &= ^= |= [= _Cilk_spawn]
 ///
 ///       expression: [C99 6.5.17]
 ///         assignment-expression ...[opt]
@@ -1837,6 +1837,23 @@ ExprResult Parser::ParseCastExpression(CastParseKind ParseKind,
       *NotPrimaryExpression = true;
     Res = ParseExpressionTrait();
     break;
+
+  // postfix-expression: [CP]
+  //   _Cilk_spawn[opt] postfix-expression '(' argument-expression-list[opt] ')'
+  case tok::kw__Cilk_spawn:
+  case tok::kw_cilk_spawn: {
+    SourceLocation SpawnLoc = ConsumeToken();
+    // if (!getLangOpts().Cilk) {
+    //   Diag(SpawnLoc, diag::err_cilkplus_disable);
+    //   SkipUntil(tok::semi, StopAtSemi | StopBeforeMatch);
+    //   return ExprError();
+    // }
+
+    Res = ParseCastExpression(AnyCastExpr);
+    if (!Res.isInvalid())
+      Res = Actions.ActOnCilkSpawnExpr(SpawnLoc, Res.get());
+    return Res;
+  }
 
   case tok::at: {
     if (NotPrimaryExpression)

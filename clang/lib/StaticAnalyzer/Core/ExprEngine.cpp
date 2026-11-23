@@ -1742,6 +1742,10 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
     case Stmt::FunctionParmPackExprClass:
     case Stmt::SpawnStmtClass:
     case Stmt::SyncStmtClass:      
+    case Stmt::CilkSpawnStmtClass:
+    case Expr::CilkSpawnExprClass:
+    case Stmt::CilkSyncStmtClass:
+    case Stmt::CilkScopeStmtClass:
     case Stmt::CoroutineBodyStmtClass:
     case Stmt::CoawaitExprClass:
     case Stmt::DependentCoawaitExprClass:
@@ -1857,6 +1861,8 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
     case Stmt::SwitchStmtClass:
     case Stmt::WhileStmtClass:
     case Expr::MSDependentExistsStmtClass:
+    case Stmt::CilkForStmtClass:
+    case Stmt::CilkForRangeStmtClass:
       llvm_unreachable("Stmt should not be in analyzer evaluation loop");
     case Stmt::ImplicitValueInitExprClass:
       // These nodes are shared in the CFG and would case caching out.

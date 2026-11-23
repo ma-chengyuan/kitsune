@@ -15,6 +15,7 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclTemplate.h"
+#include "clang/AST/ExprCilk.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -315,6 +316,11 @@ static Cl::Kinds ClassifyInternal(ASTContext &Ctx, const Expr *E) {
     //   whether the expression is an lvalue.
   case Expr::ParenExprClass:
     return ClassifyInternal(Ctx, cast<ParenExpr>(E)->getSubExpr());
+
+    // A _Cilk_spawn does not affect the classification of the spawned
+    // expression.
+  case Expr::CilkSpawnExprClass:
+    return ClassifyInternal(Ctx, cast<CilkSpawnExpr>(E)->getSpawnedExpr());
 
     // C11 6.5.1.1p4: [A generic selection] is an lvalue, a function designator,
     // or a void expression if its result expression is, respectively, an
@@ -694,10 +700,15 @@ static Cl::ModifiableType IsModifiable(ASTContext &Ctx, const Expr *E,
   if (CT->isIncompleteType())
     return Cl::CM_IncompleteType;
 
-  // Records with any const fields (recursively) are not modifiable.
-  if (const RecordType *R = CT->getAs<RecordType>())
+  if (const RecordType *R = CT->getAs<RecordType>()) {
+    // Records with any const fields (recursively) are not modifiable.
     if (R->hasConstFields())
       return Cl::CM_ConstQualifiedField;
+    // Records with hyperobject fields are not assignable as records.
+    // This is an implementation restriction.
+    if (R->hasHyperobjectFields())
+      return Cl::CM_HyperobjectField;
+  }
 
   return Cl::CM_Modifiable;
 }
@@ -753,6 +764,7 @@ Expr::isModifiableLvalue(ASTContext &Ctx, SourceLocation *Loc) const {
   case Cl::CM_ConstQualified: return MLV_ConstQualified;
   case Cl::CM_ConstQualifiedField: return MLV_ConstQualifiedField;
   case Cl::CM_ConstAddrSpace: return MLV_ConstAddrSpace;
+  case Cl::CM_HyperobjectField: return MLV_HyperobjectField;
   case Cl::CM_ArrayType: return MLV_ArrayType;
   case Cl::CM_IncompleteType: return MLV_IncompleteType;
   }

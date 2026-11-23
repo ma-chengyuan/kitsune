@@ -14,6 +14,7 @@
 #ifndef LLVM_CLANG_BASIC_LANGOPTIONS_H
 #define LLVM_CLANG_BASIC_LANGOPTIONS_H
 
+#include "clang/Basic/Cilk.h"
 #include "clang/Basic/CommentOptions.h"
 #include "clang/Basic/KitsuneOptions.h"
 #include "clang/Basic/LLVM.h"
@@ -75,6 +76,8 @@ class LangOptionsBase {
 public:
   using Visibility = clang::Visibility;
   using RoundingMode = llvm::RoundingMode;
+
+  enum CilkVersion { Cilk_none, Cilk_plus, Cilk_opencilk };
 
   enum GCMode { NonGC, GCOnly, HybridGC };
   enum StackProtectorMode { SSPOff, SSPOn, SSPStrong, SSPReq };
@@ -592,6 +595,8 @@ public:
   /// the code base which makes it marginally less painful when we have to
   /// merge with upstream.
   KitsuneOptions KitsuneOpts;
+
+  CilkOptionSet CilkOptions;
 
   LangOptions();
 

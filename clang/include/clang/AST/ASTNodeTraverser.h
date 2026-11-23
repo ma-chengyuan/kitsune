@@ -20,6 +20,7 @@
 #include "clang/AST/CommentVisitor.h"
 #include "clang/AST/DeclVisitor.h"
 #include "clang/AST/LocInfoType.h"
+#include "clang/AST/StmtCilk.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/AST/TemplateArgumentVisitor.h"
 #include "clang/AST/Type.h"
@@ -163,8 +164,12 @@ public:
         return;
 
       if (Traversal == TK_IgnoreUnlessSpelledInSource &&
-          isa<LambdaExpr, CXXForRangeStmt, CallExpr,
+          isa<LambdaExpr, CXXForRangeStmt, CilkForRangeStmt, CallExpr,
               CXXRewrittenBinaryOperator>(S))
+        return;
+
+      if (Traversal == TK_IgnoreUnlessSpelledInSource && isa<CilkForStmt>(S) &&
+          cast<CilkForStmt>(S)->getLoopVarStmt())
         return;
 
       for (const Stmt *SubStmt : S->children())
@@ -381,6 +386,13 @@ public:
     }
   }
 
+  void VisitHyperobjectType(const HyperobjectType *T) {
+    Visit(T->getElementType());
+    if (T->getIdentity())
+      Visit(T->getIdentity());
+    if (T->getReduce())
+      Visit(T->getReduce());
+  }
   void VisitComplexType(const ComplexType *T) { Visit(T->getElementType()); }
   void VisitLocInfoType(const LocInfoType *T) {
     Visit(T->getTypeSourceInfo()->getTypeLoc());
@@ -548,7 +560,8 @@ public:
   }
 
   void VisitVarDecl(const VarDecl *D) {
-    if (Traversal == TK_IgnoreUnlessSpelledInSource && D->isCXXForRangeDecl())
+    if (Traversal == TK_IgnoreUnlessSpelledInSource &&
+        (D->isCXXForRangeDecl() || D->isSimpleCilkForLVDecl()))
       return;
 
     if (const auto *TSI = D->getTypeSourceInfo(); VisitLocs && TSI)
@@ -910,6 +923,21 @@ public:
       Visit(Node->getRangeInit());
       Visit(Node->getBody());
     }
+  }
+
+  void VisitCilkForStmt(const CilkForStmt *Node) {
+    if (Traversal == TK_IgnoreUnlessSpelledInSource && Node->getLoopVarStmt()) {
+      Visit(Node->getLoopVariable());
+      Visit(Node->getOriginalInit());
+      Visit(Node->getOriginalCond());
+      Visit(Node->getOriginalInc());
+      Visit(Node->getBody());
+    }
+  }
+
+  void VisitCilkForRangeStmt(const CilkForRangeStmt *Node) {
+    if (Traversal == TK_IgnoreUnlessSpelledInSource)
+      Visit(Node->getCXXForRangeStmt());
   }
 
   void VisitCallExpr(const CallExpr *Node) {

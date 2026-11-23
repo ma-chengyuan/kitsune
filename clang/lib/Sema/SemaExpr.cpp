@@ -516,6 +516,8 @@ ExprResult Sema::DefaultFunctionArrayConversion(Expr *E, bool Diagnose) {
     E = result.get();
   }
 
+  E = BuildHyperobjectLookup(E);
+
   QualType Ty = E->getType();
   assert(!Ty.isNull() && "DefaultFunctionArrayConversion - missing type");
 
@@ -645,7 +647,7 @@ ExprResult Sema::DefaultLvalueConversion(Expr *E) {
   //   converted to a prvalue.
   if (!E->isGLValue()) return E;
 
-  QualType T = E->getType();
+  QualType T = E->getType().stripHyperobject();
   assert(!T.isNull() && "r-value conversion on typeless expression?");
 
   // lvalue-to-rvalue conversion cannot be applied to types that decay to
@@ -680,6 +682,10 @@ ExprResult Sema::DefaultLvalueConversion(Expr *E) {
   }
 
   CheckForNullPointerDereference(*this, E);
+
+  E = BuildHyperobjectLookup(E);
+  assert(T == E->getType() && "Unexpected Type from hyperobject lookup.");
+
   if (const ObjCIsaExpr *OISA = dyn_cast<ObjCIsaExpr>(E->IgnoreParenCasts())) {
     NamedDecl *ObjectGetClass = LookupSingleName(TUScope,
                                      &Context.Idents.get("object_getClass"),
@@ -2257,6 +2263,86 @@ NonOdrUseReason Sema::getNonOdrUseReasonInCurrentContext(ValueDecl *D) {
   // All remaining non-variable cases constitute an odr-use. For variables, we
   // need to wait and see how the expression is used.
   return NOUR_None;
+}
+
+Expr *Sema::BuildHyperobjectLookup(Expr *E, bool Pointer) {
+  if (!Pointer && !E->isGLValue())
+    return E;
+
+  if (getLangOpts().getCilk() != LangOptions::Cilk_opencilk)
+    return E;
+
+  QualType InputType = E->getType();
+  if (Pointer) {
+    const PointerType *PT = InputType->getAs<PointerType>();
+    if (!PT)
+      return E;
+    InputType = PT->getPointeeType();
+  }
+
+  const HyperobjectType *HT = InputType->getAs<HyperobjectType>();
+  if (!HT)
+    return E;
+
+  QualType ResultType = HT->getElementType().withFastQualifiers(
+      InputType.getLocalFastQualifiers());
+  QualType Ptr = Context.getPointerType(ResultType);
+
+  SourceLocation Loc = E->getExprLoc();
+  ExprResult SizeExpr;
+  if (ResultType.getTypePtr()->isDependentType()) {
+    SizeExpr = CreateUnaryExprOrTypeTraitExpr(E, Loc, UETT_SizeOf);
+  } else {
+    QualType SizeType = Context.getSizeType();
+    llvm::APInt Size(Context.getTypeSize(SizeType),
+                     Context.getTypeSizeInChars(ResultType).getQuantity());
+    SizeExpr = IntegerLiteral::Create(Context, Size, SizeType, E->getExprLoc());
+  }
+
+  Expr *VarAddr;
+  if (Pointer) {
+    VarAddr = E;
+  } else if (ResultType->isDependentType() ||
+             (CurContext->isDependentContext() && E->isLValue())) {
+    // Instantiation rebuilds unary & on a reducer as the address of its
+    // current view. The lookup itself needs the address of the reducer.
+    ExprResult Address =
+      BuildBuiltinCallExpr(Loc, Builtin::BI__builtin_addressof, E);
+    assert(Address.isUsable());
+    VarAddr = Address.get();
+  } else {
+    VarAddr = UnaryOperator::Create(Context, E, UO_AddrOf, Ptr, VK_PRValue,
+                                    OK_Ordinary, SourceLocation(), false,
+                                    CurFPFeatureOverrides());
+  }
+  Expr *CallArgs[] = {VarAddr, SizeExpr.get(), HT->getIdentity(),
+                      HT->getReduce()};
+  ExprResult Call =
+      BuildBuiltinCallExpr(Loc, Builtin::BI__hyper_lookup, CallArgs);
+
+  // Template expansion normally strips out implicit casts, so make this
+  // explicit in C++.
+  Expr *Casted = nullptr;
+  if (CurContext->isDependentContext())
+    // Based on logic in CoroutineStmtBuilder::makeNewAndDeleteExpr()
+    Casted =
+        BuildCXXNamedCast(Loc, tok::kw_static_cast,
+                          Context.getTrivialTypeSourceInfo(Ptr), Call.get(),
+                          SourceRange(Loc, Loc), SourceRange(Loc, Loc))
+            .get();
+  else
+    Casted =
+        ImplicitCastExpr::Create(Context, Ptr, CK_BitCast, Call.get(), nullptr,
+                                 VK_PRValue, CurFPFeatureOverrides());
+
+  if (Pointer)
+    return Casted;
+
+  auto *Deref = UnaryOperator::Create(Context, Casted, UO_Deref, ResultType,
+                                      VK_LValue, OK_Ordinary, SourceLocation(),
+                                      false, CurFPFeatureOverrides());
+
+  return Deref;
 }
 
 DeclRefExpr *
@@ -4483,6 +4569,9 @@ static void captureVariablyModifiedType(ASTContext &Context, QualType T,
     case Type::Atomic:
       T = cast<AtomicType>(Ty)->getValueType();
       break;
+    case Type::Hyperobject:
+      T = cast<HyperobjectType>(Ty)->getElementType();
+      break;
     }
   } while (!T.isNull() && T->isVariablyModifiedType());
 }
@@ -6142,6 +6231,24 @@ bool Sema::CheckArgsForPlaceholders(MultiExprArg args) {
   return hasInvalid;
 }
 
+/// checkNumSpawnedExprs - Check that an appropriate number of spawned
+/// expressions appear in args.
+static bool checkNumSpawnedExprs(Sema &S, MultiExprArg args) {
+  unsigned count = 0;
+  for (size_t i = 0, e = args.size(); i != e; i++) {
+    if (isa<CilkSpawnExpr>(args[i])) {
+      ++count;
+      if (count > 1) {
+        if (count == 2)
+          S.Diag(args[i]->getBeginLoc(), diag::err_multiple_spawns);
+        else
+          S.Diag(args[i]->getBeginLoc(), diag::note_multiple_spawns);
+      }
+    }
+  }
+  return (count > 1);
+}
+
 /// If a builtin function has a pointer argument with no explicit address
 /// space, then it should be able to accept a pointer to any address
 /// space as input.  In order to do this, we need to replace the
@@ -6162,6 +6269,9 @@ static FunctionDecl *rewriteBuiltinFunctionDecl(Sema *Sema, ASTContext &Context,
 
   if (!Context.BuiltinInfo.hasPtrArgsOrResult(FDecl->getBuiltinID()) || !FT ||
       ArgExprs.size() < FT->getNumParams())
+    return nullptr;
+
+  if (FDecl->getBuiltinID() == Builtin::BI__builtin_addressof)
     return nullptr;
 
   bool NeedsNewDecl = false;
@@ -6414,6 +6524,10 @@ ExprResult Sema::BuildCallExpr(Scope *Scope, Expr *Fn, SourceLocation LParenLoc,
   Fn = Result.get();
 
   if (CheckArgsForPlaceholders(ArgExprs))
+    return ExprError();
+
+  // Check that we have at most one spawned argument.
+  if (checkNumSpawnedExprs(*this, ArgExprs))
     return ExprError();
 
   if (getLangOpts().CPlusPlus) {
@@ -9560,6 +9674,8 @@ Sema::CheckSingleAssignmentConstraints(QualType LHSType, ExprResult &CallerRHS,
   // We need to be able to tell the caller whether we diagnosed a problem, if
   // they ask us to issue diagnostics.
   assert((ConvertRHS || !Diagnose) && "can't indicate whether we diagnosed");
+
+  LHSType = LHSType.stripHyperobject();
 
   // If ConvertRHS is false, we want to leave the caller's RHS untouched. Sadly,
   // we can't avoid *all* modifications at the moment, so we need some somewhere
@@ -13480,6 +13596,9 @@ static bool CheckForModifiableLvalue(Expr *E, SourceLocation Loc, Sema &S) {
   case Expr::MLV_SubObjCPropertySetting:
     DiagID = diag::err_no_subobject_property_setting;
     break;
+  case Expr::MLV_HyperobjectField:
+    DiagID = diag::err_hyperobject_struct_assign;
+    break;
   }
 
   SourceRange Assign;
@@ -14407,6 +14526,12 @@ Sema::getSelfAssignmentClassMemberCandidate(const ValueDecl *SelfAssigned) {
   return (Field != Parent->field_end()) ? *Field : nullptr;
 }
 
+/// Check if Expr is an illegal spawn expression.
+static void CheckForIllegalSpawn(Sema &S, Expr *Expr) {
+  if (isa<CilkSpawnExpr>(Expr->IgnoreImplicit()))
+    S.Diag(Expr->getExprLoc(), diag::err_invalid_spawn_expr);
+}
+
 /// DiagnoseSelfAssignment - Emits a warning if a value is assigned to itself.
 /// This warning suppressed in the event of macro expansions.
 static void DiagnoseSelfAssignment(Sema &S, Expr *LHSExpr, Expr *RHSExpr,
@@ -14648,6 +14773,17 @@ ExprResult Sema::CreateBuiltinBinOp(SourceLocation OpLoc,
 
   checkTypeSupport(LHSExpr->getType(), OpLoc, /*ValueDecl*/ nullptr);
   checkTypeSupport(RHSExpr->getType(), OpLoc, /*ValueDecl*/ nullptr);
+
+  // Check for illegal spawns
+  // TODO: Add support for _Cilk_spawn on the RHS of a compound-assignment
+  // operator.
+  if (!BinaryOperator::isAssignmentOp(Opc) ||
+      BinaryOperator::isCompoundAssignmentOp(Opc))
+    CheckForIllegalSpawn(*this, RHS.get());
+  CheckForIllegalSpawn(*this, LHS.get());
+
+  if (BinaryOperator::isAssignmentOp(Opc))
+    LHS = BuildHyperobjectLookup(LHS.get());
 
   switch (Opc) {
   case BO_Assign:
@@ -15113,6 +15249,12 @@ static ExprResult BuildOverloadedBinOp(Sema &S, Scope *Sc, SourceLocation OpLoc,
     break;
   }
 
+  // Check for illegal spawns
+  if (!BinaryOperator::isAssignmentOp(Opc) ||
+      BinaryOperator::isCompoundAssignmentOp(Opc))
+    CheckForIllegalSpawn(S, RHS);
+  CheckForIllegalSpawn(S, LHS);
+
   // Find all of the overloaded operators visible from this point.
   UnresolvedSet<16> Functions;
   S.LookupBinOp(Sc, OpLoc, Opc, Functions);
@@ -15129,8 +15271,8 @@ ExprResult Sema::BuildBinOp(Scope *S, SourceLocation OpLoc,
   std::tie(LHS, RHS) = CorrectDelayedTyposInBinOp(*this, Opc, LHSExpr, RHSExpr);
   if (!LHS.isUsable() || !RHS.isUsable())
     return ExprError();
-  LHSExpr = LHS.get();
-  RHSExpr = RHS.get();
+  LHSExpr = BuildHyperobjectLookup(LHS.get());
+  RHSExpr = BuildHyperobjectLookup(RHS.get());
 
   // We want to end up calling one of SemaPseudoObject::checkAssignment
   // (if the LHS is a pseudo-object), BuildOverloadedBinOp (if
@@ -15315,6 +15457,7 @@ ExprResult Sema::CreateBuiltinUnaryOp(SourceLocation OpLoc,
     case UO_PreDec:
     case UO_PostInc:
     case UO_PostDec:
+      Input = BuildHyperobjectLookup(InputExpr);
       resultType =
           CheckIncrementDecrementOperand(*this, Input.get(), VK, OK, OpLoc,
                                          Opc == UO_PreInc || Opc == UO_PostInc,
@@ -15322,6 +15465,8 @@ ExprResult Sema::CreateBuiltinUnaryOp(SourceLocation OpLoc,
       CanOverflow = isOverflowingIntegerType(Context, resultType);
       break;
     case UO_AddrOf:
+      // Before CheckAddressOfOperand
+      Input = BuildHyperobjectLookup(InputExpr);
       resultType = CheckAddressOfOperand(Input, OpLoc);
       CheckAddressOfNoDeref(InputExpr);
       RecordModifiableNonNullParam(*this, InputExpr);
@@ -15463,6 +15608,7 @@ ExprResult Sema::CreateBuiltinUnaryOp(SourceLocation OpLoc,
       break;
     case UO_Real:
     case UO_Imag:
+      Input = BuildHyperobjectLookup(InputExpr);
       resultType = CheckRealImagOperand(*this, Input, OpLoc, Opc == UO_Real);
       // _Real maps ordinary l-values into ordinary l-values. _Imag maps
       // ordinary complex l-values to ordinary l-values and all other values to
@@ -15583,16 +15729,20 @@ ExprResult Sema::BuildUnaryOp(Scope *S, SourceLocation OpLoc,
     Input = Result.get();
   }
 
-  if (getLangOpts().CPlusPlus && Input->getType()->isOverloadableType() &&
-      UnaryOperator::getOverloadedOperator(Opc) != OO_None &&
-      !(Opc == UO_AddrOf && isQualifiedMemberAccess(Input))) {
-    // Find all of the overloaded operators visible from this point.
-    UnresolvedSet<16> Functions;
-    OverloadedOperatorKind OverOp = UnaryOperator::getOverloadedOperator(Opc);
-    if (S && OverOp != OO_None)
-      LookupOverloadedOperatorName(OverOp, S, Functions);
+  if (getLangOpts().CPlusPlus) {
+    // A hyperobject may need to be converted to a view.
+    QualType Real = Input->getType().stripHyperobject();
+    if (Real->isOverloadableType() &&
+        UnaryOperator::getOverloadedOperator(Opc) != OO_None &&
+        !(Opc == UO_AddrOf && isQualifiedMemberAccess(Input))) {
+      // Find all of the overloaded operators visible from this point.
+      UnresolvedSet<16> Functions;
+      OverloadedOperatorKind OverOp = UnaryOperator::getOverloadedOperator(Opc);
+      if (S && OverOp != OO_None)
+        LookupOverloadedOperatorName(OverOp, S, Functions);
 
-    return CreateOverloadedUnaryOp(OpLoc, Opc, Functions, Input);
+      return CreateOverloadedUnaryOp(OpLoc, Opc, Functions, Input);
+    }
   }
 
   return CreateBuiltinUnaryOp(OpLoc, Opc, Input, IsAfterAmp);

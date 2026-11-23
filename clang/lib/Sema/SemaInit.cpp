@@ -14,6 +14,7 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/ExprCilk.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
@@ -1439,6 +1440,8 @@ void InitListChecker::CheckSubElementType(const InitializedEntity &Entity,
   if (ElemType->isReferenceType())
     return CheckReferenceType(Entity, IList, ElemType, Index,
                               StructuredList, StructuredIndex);
+
+  ElemType = ElemType.stripHyperobject();
 
   if (InitListExpr *SubInitList = dyn_cast<InitListExpr>(expr)) {
     if (SubInitList->getNumInits() == 1 &&
@@ -3785,6 +3788,7 @@ void InitializationSequence::Step::Destroy() {
   case SK_OCLSamplerInit:
   case SK_OCLZeroOpaqueType:
   case SK_ParenthesizedListInit:
+  case SK_ViewLookup:
     break;
 
   case SK_ConversionSequence:
@@ -3901,6 +3905,13 @@ void InitializationSequence::AddReferenceBindingStep(QualType T,
 void InitializationSequence::AddFinalCopy(QualType T) {
   Step S;
   S.Kind = SK_FinalCopy;
+  S.Type = T;
+  Steps.push_back(S);
+}
+
+void InitializationSequence::AddViewLookup(QualType T) {
+  Step S;
+  S.Kind = SK_ViewLookup;
   S.Type = T;
   Steps.push_back(S);
 }
@@ -5119,6 +5130,19 @@ static void TryReferenceInitializationCore(Sema &S,
   QualType DestType = Entity.getType();
   SourceLocation DeclLoc = Initializer->getBeginLoc();
 
+  // OpenCilk: If the right hand side is a hyperobject, see if the
+  // left hand side wants the hyperobject or a view.
+  if (T2->isHyperobjectType() && !T1->isHyperobjectType()) {
+    // If the view of T2 is a reference type (already diagnosed)
+    // then CompareReferenceRelationship will assert fail.
+    QualType View2 = T2.stripHyperobject();
+    if (!View2->isReferenceType()) {
+      Sequence.AddViewLookup(T1);
+      T2 = View2;
+      cv2T2 = cv2T2.stripHyperobject();
+    }
+  }
+
   // Compute some basic properties of the types and the initializer.
   bool isLValueRef = DestType->isLValueReferenceType();
   bool isRValueRef = !isLValueRef;
@@ -6284,7 +6308,18 @@ void InitializationSequence::InitializeFrom(Sema &S,
                                             bool TopLevelOfInitList,
                                             bool TreatUnavailableAsInvalid) {
   ASTContext &Context = S.Context;
-
+  // Peel off any CilkSpawnExpr at the start of the arguments.
+  if (Args.size() == 1)
+    if (CilkSpawnExpr *E = dyn_cast<CilkSpawnExpr>(Args[0])) {
+      IsSpawned = true;
+      SpawnLoc = E->getExprLoc();
+      Args[0] = E->getSpawnedExpr();
+      if (ExprWithCleanups *EWC =
+          dyn_cast<ExprWithCleanups>(E->getSpawnedExpr())) {
+        S.Cleanup.setExprNeedsCleanups(true);
+        Args[0] = EWC->getSubExpr();
+      }
+    }
   // Eliminate non-overload placeholder types in the arguments.  We
   // need to do this before checking whether types are dependent
   // because lowering a pseudo-object expression might well give us
@@ -7557,12 +7592,15 @@ ExprResult InitializationSequence::Perform(Sema &S,
         !Kind.isExplicitCast()) {
       // Rebuild the ParenListExpr.
       SourceRange ParenRange = Kind.getParenOrBraceRange();
+      assert(!IsSpawned && "ParenListExpr is spawned");
       return S.ActOnParenListExpr(ParenRange.getBegin(), ParenRange.getEnd(),
                                   Args);
     }
     assert(Kind.getKind() == InitializationKind::IK_Copy ||
            Kind.isExplicitCast() ||
            Kind.getKind() == InitializationKind::IK_DirectList);
+    if (IsSpawned)
+      return S.ActOnCilkSpawnExpr(SpawnLoc, Args[0]);
     return ExprResult(Args[0]);
   }
 
@@ -7639,6 +7677,7 @@ ExprResult InitializationSequence::Perform(Sema &S,
   case SK_QualificationConversionPRValue:
   case SK_FunctionReferenceConversion:
   case SK_AtomicConversion:
+  case SK_ViewLookup:
   case SK_ConversionSequence:
   case SK_ConversionSequenceNoNarrowing:
   case SK_ListInitialization:
@@ -7816,6 +7855,10 @@ ExprResult InitializationSequence::Perform(Sema &S,
     case SK_ExtraneousCopyToTemporary:
       CurInit = CopyObject(S, Step->Type, Entity, CurInit,
                            /*IsExtraneousCopy=*/true);
+      break;
+
+    case SK_ViewLookup:
+      CurInit = S.BuildHyperobjectLookup(CurInit.get());
       break;
 
     case SK_UserConversion: {
@@ -8456,6 +8499,9 @@ ExprResult InitializationSequence::Perform(Sema &S,
   CheckMoveOnConstruction(S, Init,
                           Entity.getKind() == InitializedEntity::EK_Result);
 
+  // Push a spawn back onto the init if necessary.
+  if (IsSpawned)
+    return S.ActOnCilkSpawnExpr(SpawnLoc, Init);
   return Init;
 }
 
@@ -9263,6 +9309,10 @@ void InitializationSequence::dump(raw_ostream &OS) const {
     switch (S->Kind) {
     case SK_ResolveAddressOfOverloadedFunction:
       OS << "resolve address of overloaded function";
+      break;
+
+    case SK_ViewLookup:
+      OS << "lookup hyperobject view";
       break;
 
     case SK_CastDerivedToBasePRValue:

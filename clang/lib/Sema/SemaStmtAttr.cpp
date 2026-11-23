@@ -85,13 +85,22 @@ static Attr *handleLoopHintAttr(Sema &S, Stmt *St, const ParsedAttr &A,
   StringRef PragmaName =
       llvm::StringSwitch<StringRef>(PragmaNameLoc->Ident->getName())
           .Cases("unroll", "nounroll", "unroll_and_jam", "nounroll_and_jam",
-                 PragmaNameLoc->Ident->getName())
+                 "cilk", PragmaNameLoc->Ident->getName())
           .Default("clang loop");
+
+  if ((PragmaName == "cilk") &&
+      (St->getStmtClass() != Stmt::CilkForStmtClass &&
+       St->getStmtClass() != Stmt::CilkForRangeStmtClass)) {
+    S.Diag(St->getBeginLoc(), diag::err_pragma_cilk_precedes_noncilk)
+      << "#pragma cilk";
+    return nullptr;
+  }
 
   // This could be handled automatically by adding a Subjects definition in
   // Attr.td, but that would make the diagnostic behavior worse in this case
   // because the user spells this attribute as a pragma.
-  if (!isa<DoStmt, ForStmt, CXXForRangeStmt, WhileStmt, ForallStmt>(St)) {
+  if (!isa<DoStmt, ForStmt, CXXForRangeStmt, WhileStmt, ForallStmt,
+           CXXForallRangeStmt, CilkForStmt, CilkForRangeStmt>(St)) {
     std::string Pragma = "#pragma " + std::string(PragmaName);
     S.Diag(St->getBeginLoc(), diag::err_pragma_loop_precedes_nonloop) << Pragma;
     return nullptr;
@@ -129,6 +138,18 @@ static Attr *handleLoopHintAttr(Sema &S, Stmt *St, const ParsedAttr &A,
       SetHints(LoopHintAttr::UnrollAndJamCount, LoopHintAttr::Numeric);
     else
       SetHints(LoopHintAttr::UnrollAndJam, LoopHintAttr::Enable);
+  } else if (PragmaName == "cilk") {
+    Option = llvm::StringSwitch<LoopHintAttr::OptionType>(
+                 OptionLoc->Ident->getName())
+                 .Case("grainsize", LoopHintAttr::TapirGrainSize)
+                 .Default(LoopHintAttr::TapirGrainSize);
+    if (Option == LoopHintAttr::TapirGrainSize) {
+      assert(ValueExpr && "Attribute must have a valid value expression.");
+      if (S.CheckLoopHintExpr(ValueExpr, St->getBeginLoc(), /*AllowZero=*/true))
+        return nullptr;
+      State = LoopHintAttr::Numeric;
+    } else
+      llvm_unreachable("bad loop hint");
   } else {
     // #pragma clang loop ...
     assert(OptionLoc && OptionLoc->Ident &&
@@ -652,7 +673,9 @@ static Attr *handleTapirTargetAttr(Sema &S, Stmt *St, const ParsedAttr &A,
   // The attribute is not currently supported on spawn and sync statements.
   //
   if (St->getStmtClass() == Stmt::ForallStmtClass ||
-      St->getStmtClass() == Stmt::CXXForallRangeStmtClass) {
+      St->getStmtClass() == Stmt::CXXForallRangeStmtClass ||
+      St->getStmtClass() == Stmt::CilkForStmtClass ||
+      St->getStmtClass() == Stmt::CilkForRangeStmtClass) {
     return ::new (S.Context) TapirTargetAttr(S.Context, A, tapirTK);
 
   } else if (Expr *E = dyn_cast<Expr>(St)) {
@@ -746,6 +769,30 @@ static Attr *handleKitsuneLaunchAttr(Sema &S, Stmt *St, const ParsedAttr &A,
   return ::new (S.Context) KitsuneLaunchAttr(S.Context, A, TPBExpr);
 }
 
+static Attr *handleTapirDeferredSyncAttr(Sema &S, Stmt *St,
+                                         const ParsedAttr &A) {
+  if (isa<CilkForStmt, CilkForRangeStmt>(St)) {
+    return ::new (S.Context) TapirDeferredSyncAttr(S.Context, A);
+  }
+  S.Diag(A.getLoc(), diag::err_tapir_target_attr_unsupported_stmt);
+  return nullptr;
+}
+
+static Attr *handleTapirGrainSizeAttr(Sema &S, Stmt *St, const ParsedAttr &A,
+                                      SourceRange Range) {
+  if (isa<CilkForStmt, CilkForRangeStmt>(St)) {
+    Expr *E = A.getArgAsExpr(0);
+    llvm::APSInt ValueAPS;
+    if (S.CheckLoopHintExpr(E, Range.getBegin(), false) ||
+        S.VerifyIntegerConstantExpression(E, &ValueAPS).isInvalid())
+      return nullptr;
+    return ::new (S.Context)
+        TapirGrainSizeAttr(S.Context, A, ValueAPS.getExtValue());
+  }
+  S.Diag(A.getLoc(), diag::err_tapir_target_attr_unsupported_stmt);
+  return nullptr;
+}
+
 static Attr *ProcessStmtAttribute(Sema &S, Stmt *St, const ParsedAttr &A,
                                   SourceRange Range) {
   if (A.isInvalid() || A.getKind() == ParsedAttr::IgnoredAttribute)
@@ -804,6 +851,10 @@ static Attr *ProcessStmtAttribute(Sema &S, Stmt *St, const ParsedAttr &A,
     return handleTapirTargetAttr(S, St, A, Range);
   case ParsedAttr::AT_KitsuneLaunch:
     return handleKitsuneLaunchAttr(S, St, A, Range);
+  case ParsedAttr::AT_TapirDeferredSync:
+    return handleTapirDeferredSyncAttr(S, St, A);
+  case ParsedAttr::AT_TapirGrainSize:
+    return handleTapirGrainSizeAttr(S, St, A, Range);
   default:
     // N.B., ClangAttrEmitter.cpp emits a diagnostic helper that ensures a
     // declaration attribute is not written on a statement, but this code is

@@ -106,6 +106,9 @@ struct LoopAttributes {
 
   /// Value for tapir.loop.target metadata.
   std::optional<llvm::TapirTargetID> LoopTarget;
+
+  /// Whether lowering may defer synchronization of this loop.
+  bool DeferredSync = false;
 };
 
 /// Information used when generating a structured loop.
@@ -336,6 +339,8 @@ public:
   void setLoopTarget(std::optional<llvm::TapirTargetID> LT) {
     StagedAttrs.LoopTarget = LT;
   }
+
+  void setDeferredSync() { StagedAttrs.DeferredSync = true; }
 
   /// Set the GPU parallelism level for the next loop pushed.
   void setGPUParallelism(const LoopAttributes::GPUParallelismLevel &Level) {

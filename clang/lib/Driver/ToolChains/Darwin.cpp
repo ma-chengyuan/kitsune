@@ -564,11 +564,15 @@ static void renderTapirLoweringOptions(const ArgList &Args,
   if (!(TC.getDriver().isUsingLTO() && LinkerIsLLD))
     return;
 
-  if (Args.hasArg(options::OPT_ftapir_EQ)) {
-    if (const Arg *A = Args.getLastArg(options::OPT_ftapir_EQ))
-      CmdArgs.push_back(
-          Args.MakeArgString(Twine("--tapir-target=") + A->getValue()));
-  }
+  auto Target = parseTapirTarget(Args);
+  if (!Target)
+    return;
+
+  const Arg *A = Args.getLastArg(options::OPT_ftapir_EQ);
+  CmdArgs.push_back(Args.MakeArgString(Twine("--tapir-target=") +
+                                       (A ? A->getValue() : "opencilk")));
+  if (*Target == llvm::TapirTargetID::OpenCilk)
+    TC.AddOpenCilkABIBitcode(Args, CmdArgs, /*IsLTO=*/true);
 }
 
 static void AppendPlatformPrefix(SmallString<128> &Path, const llvm::Triple &T);
@@ -3637,10 +3641,6 @@ void DarwinClang::AddLinkTapirRuntime(const ArgList &Args,
   if (not TapirTarget)
     return;
 
-  llvm_unreachable(
-      "NOT IMPLEMENTED: AddLinkTapirRuntime has to be fixed for Darwin");
-
-  // FIXME KITSUNE: Shouldn't this be like the code in ToolChain.cpp?
   switch (*TapirTarget) {
   case llvm::TapirTargetID::OpenCilk: {
     bool StaticOpenCilk = false;

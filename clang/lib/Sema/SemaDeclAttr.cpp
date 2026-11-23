@@ -7124,6 +7124,29 @@ ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D, const ParsedAttr &AL,
   case ParsedAttr::AT_VTablePointerAuthentication:
     handleVTablePointerAuthentication(S, D, AL);
     break;
+
+  // Cilk attributes
+  case ParsedAttr::AT_StrandMalloc:
+    handleSimpleAttribute<StrandMallocAttr>(S, D, AL);
+    break;
+  case ParsedAttr::AT_StrandPure:
+    handleSimpleAttribute<StrandPureAttr>(S, D, AL);
+    break;
+  case ParsedAttr::AT_Stealable:
+    handleSimpleAttribute<StealableAttr>(S, D, AL);
+    break;
+  case ParsedAttr::AT_ReducerRegister:
+    handleSimpleAttribute<ReducerRegisterAttr>(S, D, AL);
+    break;
+  case ParsedAttr::AT_HyperView:
+    handleSimpleAttribute<HyperViewAttr>(S, D, AL);
+    break;
+  case ParsedAttr::AT_ReducerUnregister:
+    handleSimpleAttribute<ReducerUnregisterAttr>(S, D, AL);
+    break;
+  case ParsedAttr::AT_Injective:
+    handleSimpleAttribute<InjectiveAttr>(S, D, AL);
+    break;
   }
 }
 

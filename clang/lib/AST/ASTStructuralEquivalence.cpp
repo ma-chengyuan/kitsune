@@ -69,10 +69,12 @@
 #include "clang/AST/DeclOpenMP.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/ExprCilk.h"
 #include "clang/AST/ExprConcepts.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
 #include "clang/AST/NestedNameSpecifier.h"
+#include "clang/AST/StmtCilk.h"
 #include "clang/AST/StmtKitsune.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/AST/StmtOpenACC.h"
@@ -847,6 +849,24 @@ static bool IsStructurallyEquivalent(StructuralEquivalenceContext &Context,
                                   cast<ComplexType>(T2)->getElementType()))
       return false;
     break;
+
+  case Type::Hyperobject: {
+    const HyperobjectType *H1 = cast<HyperobjectType>(T1);
+    const HyperobjectType *H2 = cast<HyperobjectType>(T2);
+    Expr *R1 = H1->getReduce(), *R2 = H2->getReduce();
+    Expr *I1 = H1->getIdentity(), *I2 = H2->getIdentity();
+    if (!!I1 != !!I2 || !!R1 != !!R2)
+      return false;
+    if (I1 && !IsStructurallyEquivalent(Context, I1, I2))
+      return false;
+    if (R1 && !IsStructurallyEquivalent(Context, R1, R2))
+      return false;
+    if (!IsStructurallyEquivalent(Context,
+                                  cast<HyperobjectType>(T1)->getElementType(),
+                                  cast<HyperobjectType>(T2)->getElementType()))
+      return false;
+    break;
+  }
 
   case Type::Adjusted:
   case Type::Decayed:

@@ -568,6 +568,13 @@ namespace clang {
     ExpectedStmt VisitSpawnStmt(SpawnStmt *S);
     ExpectedStmt VisitSyncStmt(SyncStmt *S);
 
+    ExpectedStmt VisitCilkSpawnStmt(CilkSpawnStmt *S);
+    ExpectedStmt VisitCilkSpawnExpr(CilkSpawnExpr *E);
+    ExpectedStmt VisitCilkSyncStmt(CilkSyncStmt *S);
+    ExpectedStmt VisitCilkForStmt(CilkForStmt *S);
+    ExpectedStmt VisitCilkForRangeStmt(CilkForRangeStmt *S);
+    ExpectedStmt VisitCilkScopeStmt(CilkScopeStmt *S);
+
     // Importing expressions
     ExpectedStmt VisitExpr(Expr *E);
     ExpectedStmt VisitSourceLocExpr(SourceLocExpr *E);
@@ -1151,6 +1158,21 @@ ExpectedType ASTNodeImporter::VisitDecayedType(const DecayedType *T) {
     return ToOriginalTypeOrErr.takeError();
 
   return Importer.getToContext().getDecayedType(*ToOriginalTypeOrErr);
+}
+
+ExpectedType ASTNodeImporter::VisitHyperobjectType(const HyperobjectType *T) {
+  ExpectedType ToElementTypeOrErr = import(T->getElementType());
+  if (!ToElementTypeOrErr)
+    return ToElementTypeOrErr.takeError();
+  ExpectedExpr ToIdentityOrErr = import(T->getIdentity());
+  if (!ToIdentityOrErr)
+    return ToIdentityOrErr.takeError();
+  ExpectedExpr ToReduceOrErr = import(T->getReduce());
+  if (!ToReduceOrErr)
+    return ToReduceOrErr.takeError();
+
+  return Importer.getToContext().getHyperobjectType(
+      *ToElementTypeOrErr, *ToIdentityOrErr, *ToReduceOrErr);
 }
 
 ExpectedType ASTNodeImporter::VisitComplexType(const ComplexType *T) {
@@ -4585,6 +4607,8 @@ ExpectedDecl ASTNodeImporter::VisitVarDecl(VarDecl *D) {
     ToVar->setInlineSpecified();
   if (D->isInline())
     ToVar->setImplicitlyInline();
+  if (D->isSimpleCilkForLVDecl())
+    ToVar->setSimpleCilkForLVDecl(true);
 
   if (FoundByLookup) {
     auto *Recent = const_cast<VarDecl *>(FoundByLookup->getMostRecentDecl());
@@ -7284,6 +7308,88 @@ ExpectedStmt ASTNodeImporter::VisitForallStmt(ForallStmt *S) {
       Importer.getToContext(),
       ToInit, ToCond, ToConditionVariable, ToInc, ToBody, ToForLoc, ToLParenLoc,
       ToRParenLoc);
+}
+
+ExpectedStmt ASTNodeImporter::VisitCilkSpawnStmt(CilkSpawnStmt *S) {
+  ExpectedSLoc ToSpawnLocOrErr = import(S->getSpawnLoc());
+  if (!ToSpawnLocOrErr)
+    return ToSpawnLocOrErr.takeError();
+  ExpectedStmt ToChildOrErr = import(S->getSpawnedStmt());
+  if (!ToChildOrErr)
+    return ToChildOrErr.takeError();
+  return new (Importer.getToContext()) CilkSpawnStmt(*ToSpawnLocOrErr,
+                                                     *ToChildOrErr);
+}
+
+ExpectedStmt ASTNodeImporter::VisitCilkSpawnExpr(CilkSpawnExpr *E) {
+  Error Err = Error::success();
+  auto ToLoc = importChecked(Err, E->getSpawnLoc());
+  auto ToExpr = importChecked(Err, E->getSpawnedExpr());
+  if (Err)
+    return std::move(Err);
+
+  return new (Importer.getToContext()) CilkSpawnExpr(ToLoc, ToExpr);
+}
+
+ExpectedStmt ASTNodeImporter::VisitCilkSyncStmt(CilkSyncStmt *S) {
+  ExpectedSLoc ToSyncLocOrErr = import(S->getSyncLoc());
+  if (!ToSyncLocOrErr)
+    return ToSyncLocOrErr.takeError();
+  return new (Importer.getToContext()) CilkSyncStmt(*ToSyncLocOrErr);
+}
+
+ExpectedStmt ASTNodeImporter::VisitCilkForStmt(CilkForStmt *S) {
+  Error Err = Error::success();
+  auto ToInit = importChecked(Err, S->getInit());
+  auto ToLimitStmt = importChecked(Err, S->getLimitStmt());
+  auto ToInitCond = importChecked(Err, S->getInitCond());
+  auto ToBeginStmt = importChecked(Err, S->getBeginStmt());
+  auto ToEndStmt = importChecked(Err, S->getEndStmt());
+  auto ToCond = importChecked(Err, S->getCond());
+  auto ToInc = importChecked(Err, S->getInc());
+  auto ToLoopVarStmt = importChecked(Err, S->getLoopVarStmt());
+  auto ToBody = importChecked(Err, S->getBody());
+  auto ToOgCond = importChecked(Err, S->getOriginalCond());
+  auto ToOgInc = importChecked(Err, S->getOriginalInc());
+  auto ToCilkForLoc = importChecked(Err, S->getCilkForLoc());
+  auto ToLParenLoc = importChecked(Err, S->getLParenLoc());
+  auto ToRParenLoc = importChecked(Err, S->getRParenLoc());
+  if (Err)
+    return std::move(Err);
+
+  return new (Importer.getToContext())
+      CilkForStmt(ToInit, ToLimitStmt, ToInitCond, ToBeginStmt, ToEndStmt,
+                  ToCond, ToInc, ToLoopVarStmt, ToBody, ToOgCond, ToOgInc,
+                  ToCilkForLoc, ToLParenLoc, ToRParenLoc);
+}
+
+ExpectedStmt ASTNodeImporter::VisitCilkForRangeStmt(CilkForRangeStmt *S) {
+  Error Err = Error::success();
+  auto ToForRange = importChecked(Err, S->getCXXForRangeStmt());
+  auto ToLoopIndex = importChecked(Err, S->getLoopIndex());
+  auto ToLocalLoopIndex = importChecked(Err, S->getLocalLoopIndexStmt());
+  auto ToLimit = importChecked(Err, S->getLimitStmt());
+  auto ToCond = importChecked(Err, S->getCond());
+  auto ToInc = importChecked(Err, S->getInc());
+  auto ToLoopIndexStmt = importChecked(Err, S->getLoopIndexStmt());
+  if (Err)
+    return std::move(Err);
+
+  ASTContext &ToContext = Importer.getToContext();
+  return new (ToContext) CilkForRangeStmt(
+      ToContext, ToForRange, ToLoopIndex, ToLocalLoopIndex, ToLimit, ToCond,
+      ToInc, ToLoopIndexStmt);
+}
+
+ExpectedStmt ASTNodeImporter::VisitCilkScopeStmt(CilkScopeStmt *S) {
+  ExpectedSLoc ToScopeLocOrErr = import(S->getScopeLoc());
+  if (!ToScopeLocOrErr)
+    return ToScopeLocOrErr.takeError();
+  ExpectedStmt ToChildOrErr = import(S->getBody());
+  if (!ToChildOrErr)
+    return ToChildOrErr.takeError();
+  return new (Importer.getToContext()) CilkScopeStmt(*ToScopeLocOrErr,
+                                                     *ToChildOrErr);
 }
 
 //----------------------------------------------------------------------------

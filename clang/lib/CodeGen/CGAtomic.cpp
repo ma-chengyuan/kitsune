@@ -833,6 +833,10 @@ RValue CodeGenFunction::EmitAtomicExpr(AtomicExpr *E) {
     return RValue::get(nullptr);
   }
 
+  // RAII to finish detach scope after processing AtomicExpr E, if E uses a
+  // spawned value.
+  DetachScopeRAII DetScope(*this);
+
   auto TInfo = getContext().getTypeInfoInChars(AtomicTy);
   uint64_t Size = TInfo.Width.getQuantity();
   unsigned MaxInlineWidthInBits = getTarget().getMaxAtomicInlineWidth();

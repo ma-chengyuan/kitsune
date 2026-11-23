@@ -85,6 +85,7 @@ StmtResult Parser::ParseStatement(SourceLocation *TrailingElseLoc,
 ///         while-statement
 ///         do-statement
 ///         for-statement
+/// [CP]    cilk_for-statement
 ///
 ///       expression-statement:
 ///         expression[opt] ';'
@@ -95,6 +96,8 @@ StmtResult Parser::ParseStatement(SourceLocation *TrailingElseLoc,
 ///         'break' ';'
 ///         'return' expression[opt] ';'
 /// [GNU]   'goto' '*' expression ';'
+/// [CP]    '_Cilk_spawn' statement ';'
+/// [CP]    '_Cilk_sync' ';'
 ///
 /// [OBC] objc-throw-statement:
 /// [OBC]   '@' 'throw' expression ';'
@@ -495,6 +498,44 @@ Retry:
 
   case tok::kw__kitsune_forall:
     return ParseForallStatement(TrailingElseLoc);
+
+  case tok::kw__Cilk_spawn:              // [CP] cilk_spawn statement
+  case tok::kw_cilk_spawn:
+    // if (!getLangOpts().Cilk) {
+    //   Diag(Tok, diag::err_cilkplus_disable);
+    //   SkipUntil(tok::semi);
+    //   return StmtError();
+    // }
+    return ParseCilkSpawnStatement();
+
+  case tok::kw__Cilk_sync:               // [CP] _Cilk_sync statement
+  case tok::kw_cilk_sync:
+    // if (!getLangOpts().Cilk) {
+    //   Diag(Tok, diag::err_cilkplus_disable);
+    //   SkipUntil(tok::semi);
+    //   return StmtError();
+    // }
+    Res = ParseCilkSyncStatement();
+    SemiError = "cilk_sync";
+    break;
+
+  case tok::kw__Cilk_for:
+  case tok::kw_cilk_for:
+    // if (!getLangOpts().Cilk) {
+    //   Diag(Tok, diag::err_cilkplus_disable);
+    //   SkipUntil(tok::semi);
+    //   return StmtError();
+    // }
+    return ParseCilkForStatement(TrailingElseLoc);
+
+  case tok::kw__Cilk_scope:              // [CP] _Cilk_scope statement
+  case tok::kw_cilk_scope:
+    // if (!getLangOpts().Cilk) {
+    //   Diag(Tok, diag::err_cilkplus_disable);
+    //   SkipUntil(tok::semi);
+    //   return StmtError();
+    // }
+    return ParseCilkScopeStatement();
 
   case tok::annot_pragma_openmp:
     // Prohibit attributes that are not OpenMP attributes, but only before

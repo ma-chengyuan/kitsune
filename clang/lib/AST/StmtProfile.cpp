@@ -2327,6 +2327,30 @@ void StmtProfiler::VisitCoyieldExpr(const CoyieldExpr *S) {
   VisitExpr(S);
 }
 
+void StmtProfiler::VisitCilkForStmt(const CilkForStmt *S) {
+  VisitStmt(S);
+}
+
+void StmtProfiler::VisitCilkSpawnStmt(const CilkSpawnStmt *S) {
+  VisitStmt(S);
+}
+
+void StmtProfiler::VisitCilkSpawnExpr(const CilkSpawnExpr *E) {
+  VisitExpr(E);
+}
+
+void StmtProfiler::VisitCilkSyncStmt(const CilkSyncStmt *S) {
+  VisitStmt(S);
+}
+
+void StmtProfiler::VisitCilkScopeStmt(const CilkScopeStmt *S) {
+  VisitStmt(S);
+}
+
+void StmtProfiler::VisitCilkForRangeStmt(const CilkForRangeStmt *S) {
+  VisitStmt(S);
+}
+
 void StmtProfiler::VisitOpaqueValueExpr(const OpaqueValueExpr *E) {
   VisitExpr(E);
 }

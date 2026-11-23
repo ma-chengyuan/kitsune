@@ -2850,8 +2850,6 @@ void ASTStmtReader::VisitOpenACCLoopConstruct(OpenACCLoopConstruct *S) {
 }
 
 //===----------------------------------------------------------------------===//
-// Kitsune constructs
-//===----------------------------------------------------------------------===//
 void ASTStmtReader::VisitSpawnStmt(SpawnStmt *S) {
   VisitStmt(S);
   S->setSpawnLoc(readSourceLocation());
@@ -2873,6 +2871,58 @@ void ASTStmtReader::VisitForallStmt(ForallStmt *S) {
   S->setForallLoc(readSourceLocation());
   S->setLParenLoc(readSourceLocation());
   S->setRParenLoc(readSourceLocation());
+}
+
+void ASTStmtReader::VisitCilkSpawnStmt(CilkSpawnStmt *S) {
+  VisitStmt(S);
+  S->setSpawnLoc(readSourceLocation());
+  S->setSpawnedStmt(Record.readSubStmt());
+}
+
+void ASTStmtReader::VisitCilkSpawnExpr(CilkSpawnExpr *E) {
+  VisitExpr(E);
+  E->setSpawnLoc(readSourceLocation());
+  E->setSpawnedExpr(Record.readSubExpr());
+}
+
+void ASTStmtReader::VisitCilkSyncStmt(CilkSyncStmt *S) {
+  VisitStmt(S);
+  S->setSyncLoc(readSourceLocation());
+}
+
+void ASTStmtReader::VisitCilkScopeStmt(CilkScopeStmt *S) {
+  VisitStmt(S);
+  S->setScopeLoc(readSourceLocation());
+  S->setBody(Record.readSubStmt());
+}
+
+void ASTStmtReader::VisitCilkForStmt(CilkForStmt *S) {
+  VisitStmt(S);
+  S->setInit(Record.readSubStmt());
+  S->setLimitStmt(Record.readSubStmt());
+  S->setInitCond(Record.readSubExpr());
+  S->setBeginStmt(Record.readSubStmt());
+  S->setEndStmt(Record.readSubStmt());
+  S->setCond(Record.readSubExpr());
+  S->setInc(Record.readSubExpr());
+  S->setLoopVarStmt(Record.readSubStmt());
+  S->setBody(Record.readSubStmt());
+  S->setOriginalCond(Record.readSubExpr());
+  S->setOriginalInc(Record.readSubExpr());
+  S->setCilkForLoc(readSourceLocation());
+  S->setLParenLoc(readSourceLocation());
+  S->setRParenLoc(readSourceLocation());
+}
+
+void ASTStmtReader::VisitCilkForRangeStmt(CilkForRangeStmt *S) {
+  VisitStmt(S);
+  S->setForRange(Record.readSubStmt());
+  S->setLoopIndex(Record.getContext(), readDeclAs<VarDecl>());
+  S->setLoopIndexStmt(cast_or_null<DeclStmt>(Record.readSubStmt()));
+  S->setLocalLoopIndexStmt(cast_or_null<DeclStmt>(Record.readSubStmt()));
+  S->setLimitStmt(cast_or_null<DeclStmt>(Record.readSubStmt()));
+  S->setCond(Record.readSubExpr());
+  S->setInc(Record.readSubExpr());
 }
 
 //===----------------------------------------------------------------------===//
@@ -3089,6 +3139,30 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
 
     case STMT_FORALL:
       S = new (Context) ForallStmt(Empty);
+      break;
+
+    case STMT_CILKSPAWN:
+      S = new (Context) CilkSpawnStmt(Empty);
+      break;
+
+    case EXPR_CILKSPAWN:
+      S = new (Context) CilkSpawnExpr(Empty);
+      break;
+
+    case STMT_CILKSYNC:
+      S = new (Context) CilkSyncStmt(Empty);
+      break;
+
+    case STMT_CILKFOR:
+      S = new (Context) CilkForStmt(Empty);
+      break;
+
+    case STMT_CILKSCOPE:
+      S = new (Context) CilkScopeStmt(Empty);
+      break;
+
+    case STMT_CILKFORRANGE:
+      S = new (Context) CilkForRangeStmt(Empty);
       break;
 
     case EXPR_PREDEFINED:

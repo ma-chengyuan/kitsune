@@ -11917,6 +11917,7 @@ GCCTypeClass EvaluateBuiltinClassifyType(QualType T,
 
   case Type::BlockPointer:
   case Type::ConstantMatrix:
+  case Type::Hyperobject:
   case Type::ObjCObject:
   case Type::ObjCInterface:
   case Type::ObjCObjectPointer:
@@ -16177,7 +16178,7 @@ bool Expr::EvaluateAsInitializer(APValue &Value, const ASTContext &Ctx,
   Info.InConstantContext = IsConstantInitialization;
 
   SourceLocation DeclLoc = VD->getLocation();
-  QualType DeclTy = VD->getType();
+  QualType DeclTy = VD->getType().stripHyperobject();
 
   if (Info.EnableNewConstInterp) {
     auto &InterpCtx = const_cast<ASTContext &>(Ctx).getInterpContext();
@@ -16498,6 +16499,8 @@ static ICEDiag CheckICE(const Expr* E, const ASTContext &Ctx) {
     return CheckICE(cast<ParenExpr>(E)->getSubExpr(), Ctx);
   case Expr::GenericSelectionExprClass:
     return CheckICE(cast<GenericSelectionExpr>(E)->getResultExpr(), Ctx);
+  case Expr::CilkSpawnExprClass:
+    return CheckICE(cast<CilkSpawnExpr>(E)->getSpawnedExpr(), Ctx);
   case Expr::IntegerLiteralClass:
   case Expr::FixedPointLiteralClass:
   case Expr::CharacterLiteralClass:

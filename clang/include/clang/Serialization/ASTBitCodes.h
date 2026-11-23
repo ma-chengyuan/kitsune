@@ -1996,7 +1996,15 @@ enum StmtCode {
   STMT_SPAWN,
   STMT_SYNC,
   STMT_FORALL,
-  STMT_CXX_FORALL_RANGE
+  STMT_CXX_FORALL_RANGE,
+
+  // Cilk Plus
+  STMT_CILKSPAWN,
+  EXPR_CILKSPAWN,
+  STMT_CILKSYNC,
+  STMT_CILKFOR,
+  STMT_CILKSCOPE,
+  STMT_CILKFORRANGE,
 };
 
 /// The kinds of designators that can occur in a

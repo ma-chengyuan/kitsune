@@ -471,6 +471,23 @@ public:
   Value *VisitUnaryCoawait(const UnaryOperator *E) {
     return Visit(E->getSubExpr());
   }
+  Value *VisitCilkSpawnExpr(CilkSpawnExpr *CSE) {
+    CGF.IsSpawned = true;
+    CGF.PushDetachScope();
+    Value *V = Visit(CSE->getSpawnedExpr());
+    if (!(CGF.CurDetachScope && CGF.CurDetachScope->IsDetachStarted()))
+      CGF.FailedSpawnWarning(CSE->getExprLoc());
+    if (DoSpawnedInit) {
+      LValue LV = LValueToSpawnInit;
+      CGF.EmitNullabilityCheck(LV, V, CSE->getExprLoc());
+      CGF.EmitStoreThroughLValue(RValue::get(V), LV, true);
+
+      // Pop the detach scope
+      CGF.IsSpawned = false;
+      CGF.PopDetachScope();
+    }
+    return V;
+  }
 
   // Leaves.
   Value *VisitIntegerLiteral(const IntegerLiteral *E) {
@@ -4840,6 +4857,35 @@ Value *ScalarExprEmitter::VisitBinAssign(const BinaryOperator *E) {
     break;
 
   case Qualifiers::OCL_None:
+    if (isa<CilkSpawnExpr>(E->getRHS()->IgnoreImplicit())) {
+      assert(!CGF.IsSpawned &&
+             "_Cilk_spawn statement found in spawning environment.");
+
+      // Compute the address to store into.
+      LHS = EmitCheckedLValue(E->getLHS(), CodeGenFunction::TCK_Store);
+
+      // Prepare to detach.
+      CGF.IsSpawned = true;
+
+      // Emit the spawned RHS.
+      RHS = Visit(E->getRHS());
+
+      // Store the value into the LHS.  Bit-fields are handled specially because
+      // the result is altered by the store, i.e., [C99 6.5.16p1] 'An assignment
+      // expression has the value of the left operand after the assignment...'.
+      if (LHS.isBitField())
+        CGF.EmitStoreThroughBitfieldLValue(RValue::get(RHS), LHS, &RHS);
+      else
+        CGF.EmitStoreThroughLValue(RValue::get(RHS), LHS);
+
+      // Finish the detach.
+      if (!(CGF.CurDetachScope && CGF.CurDetachScope->IsDetachStarted()))
+        CGF.FailedSpawnWarning(E->getRHS()->getExprLoc());
+      CGF.IsSpawned = false;
+      CGF.PopDetachScope();
+
+      break;
+    }
     // __block variables need to have the rhs evaluated first, plus
     // this should improve codegen just a little.
     Value *Previous = nullptr;
@@ -5524,6 +5570,10 @@ void CodeGenFunction::EmitScalarExprIntoLValue(const Expr *E, LValue dest,
   assert(E && hasScalarEvaluationKind(E->getType()) &&
          "Invalid scalar expression to emit");
 
+  if (isa<CilkSpawnExpr>(E) && isInit) {
+    ScalarExprEmitter(*this, dest).Visit(const_cast<Expr *>(E));
+    return;
+  }
   Value *V = ScalarExprEmitter(*this).Visit(const_cast<Expr *>(E));
   EmitNullabilityCheck(dest, V, E->getExprLoc());
   EmitStoreThroughLValue(RValue::get(V), dest, isInit);

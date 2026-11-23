@@ -35,10 +35,14 @@ static void EmitDeclInit(CodeGenFunction &CGF, const VarDecl &D,
   assert(!D.getType()->isReferenceType() &&
          "Should not call EmitDeclInit on a reference!");
 
+  // A zero-initialized reducer still needs dynamic registration.
+  const Expr *Init = D.getInit();
+  if (!Init)
+    return;
+
   QualType type = D.getType();
   LValue lv = CGF.MakeAddrLValue(DeclPtr, type);
 
-  const Expr *Init = D.getInit();
   switch (CGF.getEvaluationKind(type)) {
   case TEK_Scalar: {
     CodeGenModule &CGM = CGF.CGM;
@@ -87,6 +91,11 @@ static void EmitDeclDestroy(CodeGenFunction &CGF, const VarDecl &D,
   case QualType::DK_cxx_destructor:
     break;
 
+  case QualType::DK_hyperobject:
+    if (const HyperobjectType *H = D.getType()->getAs<HyperobjectType>())
+      DtorKind = H->getElementType().isDestructedType();
+    break;
+
   case QualType::DK_objc_strong_lifetime:
   case QualType::DK_objc_weak_lifetime:
   case QualType::DK_nontrivial_c_struct:
@@ -105,6 +114,7 @@ static void EmitDeclDestroy(CodeGenFunction &CGF, const VarDecl &D,
   // Under some ABIs, destructors return this instead of void, and cannot be
   // passed directly to __cxa_atexit if the target does not allow this
   // mismatch.
+  // Note that Record is null for a hyperobject.
   const CXXRecordDecl *Record = Type->getAsCXXRecordDecl();
   bool CanRegisterDestructor =
       Record && (!CGM.getCXXABI().HasThisReturn(
@@ -486,6 +496,10 @@ llvm::Function *CodeGenModule::CreateGlobalInitOrCleanUpFunction(
   if (getLangOpts().Sanitize.has(SanitizerKind::NumericalStability) &&
       !isInNoSanitizeList(SanitizerKind::NumericalStability, Fn, Loc))
     Fn->addFnAttr(llvm::Attribute::SanitizeNumericalStability);
+
+  if (getLangOpts().Sanitize.has(SanitizerKind::Cilk) &&
+      !isInNoSanitizeList(SanitizerKind::Cilk, Fn, Loc))
+    Fn->addFnAttr(llvm::Attribute::SanitizeCilk);
 
   if (getLangOpts().Sanitize.has(SanitizerKind::Memory) &&
       !isInNoSanitizeList(SanitizerKind::Memory, Fn, Loc))
@@ -1051,6 +1065,13 @@ void CodeGenFunction::GenerateCXXGlobalVarDeclInitFunc(llvm::Function *Fn,
   if (getLangOpts().HLSL)
     CGM.getHLSLRuntime().annotateHLSLResource(D, Addr);
 
+  ReducerCallbacks RCB = {0, 0};
+  if (getReducer(D, RCB)) {
+    llvm::Value *Addr =
+      Builder.CreateBitCast(CGM.GetAddrOfGlobalVar(D, nullptr), CGM.VoidPtrTy);
+    EmitReducerInit(D, RCB, Addr);
+  }
+
   FinishFunction();
 }
 
@@ -1161,20 +1182,43 @@ llvm::Function *CodeGenFunction::generateDestroyHelper(
                         ImplicitParamKind::Other);
   args.push_back(&Dst);
 
+  DynamicInitKind Kind;
+  bool IsReducer;
+  const char *Name;
+  if (const HyperobjectType *H = type->getAs<HyperobjectType>()) {
+    IsReducer = VD->isReducer();
+    Kind = DynamicInitKind::AtExit;
+    type = H->getElementType();
+    Name = "__cxx_global_hyperobject_dtor";
+  } else {
+    assert(destroyer && "neither reducer nor destructor");
+    IsReducer = false;
+    Kind = DynamicInitKind::GlobalArrayDestructor;
+    Name = "__cxx_global_array_dtor";
+  }
+
   const CGFunctionInfo &FI =
     CGM.getTypes().arrangeBuiltinFunctionDeclaration(getContext().VoidTy, args);
   llvm::FunctionType *FTy = CGM.getTypes().GetFunctionType(FI);
   llvm::Function *fn = CGM.CreateGlobalInitOrCleanUpFunction(
-      FTy, "__cxx_global_array_dtor", FI, VD->getLocation());
+      FTy, Name, FI, VD->getLocation());
 
   CurEHLocation = VD->getBeginLoc();
 
-  StartFunction(GlobalDecl(VD, DynamicInitKind::GlobalArrayDestructor),
-                getContext().VoidTy, fn, FI, args);
+  StartFunction(GlobalDecl(VD, Kind), getContext().VoidTy, fn, FI, args);
   // Emit an artificial location for this function.
   auto AL = ApplyDebugLocation::CreateArtificial(*this);
 
-  emitDestroy(addr, type, destroyer, useEHCleanupForArray);
+  if (IsReducer) {
+    llvm::Function *Unregister =
+        CGM.getIntrinsic(llvm::Intrinsic::reducer_unregister);
+    llvm::Value *AddrVoid =
+        Builder.CreateBitCast(addr.emitRawPointer(*this), CGM.VoidPtrTy);
+    Builder.CreateCall(Unregister, {AddrVoid});
+  }
+
+  if (destroyer)
+    emitDestroy(addr, type, destroyer, useEHCleanupForArray);
 
   FinishFunction();
 

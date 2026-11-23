@@ -1918,6 +1918,7 @@ bool CursorVisitor::VisitPipeTypeLoc(PipeTypeLoc TL) {
   }
 
 DEFAULT_TYPELOC_IMPL(Complex, Type)
+DEFAULT_TYPELOC_IMPL(Hyperobject, Type)
 DEFAULT_TYPELOC_IMPL(ConstantArray, ArrayType)
 DEFAULT_TYPELOC_IMPL(IncompleteArray, ArrayType)
 DEFAULT_TYPELOC_IMPL(VariableArray, ArrayType)
@@ -6277,8 +6278,19 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("SpawnStmt");
   case CXCursor_SyncStmt:
     return cxstring::createRef("SyncStmt");
+  case CXCursor_CilkSpawnStmt:
+    return cxstring::createRef("CilkSpawnStmt");
+  case CXCursor_CilkSpawnExpr:
+    return cxstring::createRef("CilkSpawnExpr");
+  case CXCursor_CilkSyncStmt:
+    return cxstring::createRef("CilkSyncStmt");
+  case CXCursor_CilkForStmt:
+    return cxstring::createRef("CilkForStmt");
+  case CXCursor_CilkScopeStmt:
+    return cxstring::createRef("CilkScopeStmt");
+  case CXCursor_CilkForRangeStmt:
+    return cxstring::createRef("CilkForRangeStmt");
   }
-
   llvm_unreachable("Unhandled CXCursorKind");
 }
 

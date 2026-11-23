@@ -33,6 +33,8 @@ std::optional<TapirTargetID> clang::parseTapirTarget(const opt::ArgList &Args) {
         .Case("qthreads", TapirTargetID::Qthreads)
         .Case("realm", TapirTargetID::Realm)
         .Default(std::nullopt);
+  if (Args.hasArg(options::OPT_fopencilk))
+    return TapirTargetID::OpenCilk;
   return std::nullopt;
 }
 

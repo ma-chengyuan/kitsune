@@ -8290,28 +8290,51 @@ arguments.
 def TapirRTDocs : Documentation {
   let Category = KitsuneDocs;
   let Content = [{
+The ``[[tapir::target("runtime")]]`` attribute selects a Tapir runtime for a
+parallel loop, such as ``cilk_for`` or a Kitsune ``forall`` loop. Supported
+target names are ``none``, ``serial``, ``cuda``, ``hip``, ``opencilk``,
+``openmp``, ``qthreads``, and ``realm``. Code generation requires the selected
+runtime target to be enabled in the compiler build.
+  }];
+}
 
-**Experimental**
+def TapirDeferredSyncDocs : Documentation {
+  let Category = KitsuneDocs;
+  let Content = [{
+The ``[[tapir::deferred_sync]]`` attribute defers synchronization at the end
+of a Cilk parallel loop until the enclosing synchronization point.
+  }];
+}
 
-The kitsune/tapir runtime target attribute `rt_target` let's developers target a
-specific runtime at the source level vs. using a command line argument to
-apply the target to all constructs.  The current target runtime are:
+def TapirGrainSizeDocs : Documentation {
+  let Category = KitsuneDocs;
+  let Content = [{
+The ``[[tapir::grain_size(N)]]`` attribute specifies the grainsize hint for a
+Cilk parallel loop.
+  }];
+}
 
-- cilk     : Cilk runtime system.
-- cuda     : Nvidia's cuda runtime.
-- hip      : AMD's (cuda-ish) hip runtime.
-- libomp   : The OpenMP runtime
-- qthreads : The Qthreads library
-- realm    : The Realm runtime (lower level of the Legion Programming System)
-- rocm     : AMD's Rocm runtime.
-- zero     : Intel's Level Zero runtime.
+def StrandPureDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+The ``strand_pure`` attribute denotes that the function acts like a pure function
+when called multiple times within the same strand.
+  }];
+}
 
-Example:
+def StealableDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+The ``stealable`` attribute denotes that the function contains a continuation
+that can be stolen by a work-stealing scheduler.
+  }];
+}
 
-.. code-block:: c++
-
-  [[kitsune:rt_target("cilk")]]
-  forall(...) {
+def StrandMallocDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+The ``strand_malloc`` attribute denotes that the function acts like a system
+memory allocation function for memory operations within the same strand.
   }];
 }
 

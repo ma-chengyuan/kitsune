@@ -39,6 +39,7 @@
 #include "clang/Driver/InputInfo.h"
 #include "clang/Driver/Options.h"
 #include "clang/Driver/SanitizerArgs.h"
+#include "clang/Driver/Tapir.h"
 #include "clang/Driver/Types.h"
 #include "clang/Driver/XRayArgs.h"
 #include "llvm/ADT/SmallSet.h"
@@ -6633,26 +6634,17 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   Args.AddLastArg(CmdArgs, options::OPT_fkokkos);
   Args.AddLastArg(CmdArgs, options::OPT_fkokkos_no_init);
   Args.AddLastArg(CmdArgs, options::OPT_ftapir_EQ);
-  if (Args.hasArg(options::OPT_ftapir_EQ)) {
+  Args.AddLastArg(CmdArgs, options::OPT_fopencilk);
+  Args.AddLastArg(CmdArgs, options::OPT_fopencilk_kitsune);
+  Args.AddLastArg(CmdArgs, options::OPT_fcilkplus);
+  if (auto TapirTarget = parseTapirTarget(Args)) {
     auto const &Triple = getToolChain().getTriple();
 
     // At least one runtime has been implemented for these operating systems.
     if (!Triple.isOSLinux() && !Triple.isOSFreeBSD() && !Triple.isMacOSX())
       D.Diag(diag::err_drv_kitsune_unsupported);
 
-    /* JFC: Is it possible to confuse with with -fno-opencilk? */
-    bool OpenCilk = false;
-    bool CustomTarget = false;
-
-    if (Arg *TapirRuntime = Args.getLastArgNoClaim(options::OPT_ftapir_EQ)) {
-      if (TapirRuntime->getValue() == StringRef("opencilk")) {
-        OpenCilk = true;
-      } else {
-        CustomTarget = true;
-      }
-    }
-
-    if (OpenCilk) {
+    if (*TapirTarget == llvm::TapirTargetID::OpenCilk) {
       switch (Triple.getArch()) {
       case llvm::Triple::x86:
       case llvm::Triple::x86_64:
@@ -6666,9 +6658,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
         break;
       }
 
-      if (!CustomTarget)
-        // Add the OpenCilk ABI bitcode file.
-        getToolChain().AddOpenCilkABIBitcode(Args, CmdArgs);
+      getToolChain().AddOpenCilkABIBitcode(Args, CmdArgs);
     }
   }
 

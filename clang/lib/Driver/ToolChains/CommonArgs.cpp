@@ -37,6 +37,7 @@
 #include "clang/Driver/Job.h"
 #include "clang/Driver/Options.h"
 #include "clang/Driver/SanitizerArgs.h"
+#include "clang/Driver/Tapir.h"
 #include "clang/Driver/ToolChain.h"
 #include "clang/Driver/Util.h"
 #include "clang/Driver/XRayArgs.h"
@@ -340,14 +341,15 @@ static bool shouldIgnoreUnsupportedTargetFeature(const Arg &TargetFeatureArg,
 static void renderTapirLoweringOptions(const ArgList &Args,
                                        ArgStringList &CmdArgs,
                                        const ToolChain &TC) {
-  if (Args.hasArg(options::OPT_ftapir_EQ)) {
-    if (const Arg *A = Args.getLastArg(options::OPT_ftapir_EQ)) {
-      CmdArgs.push_back(Args.MakeArgString(
-          Twine("--plugin-opt=tapir-target=") + A->getValue()));
-      if (std::string(A->getValue()) == std::string("opencilk"))
-        TC.AddOpenCilkABIBitcode(Args, CmdArgs, /*IsLTO=*/true);
-    }
-  }
+  auto Target = parseTapirTarget(Args);
+  if (!Target)
+    return;
+
+  const Arg *A = Args.getLastArg(options::OPT_ftapir_EQ);
+  CmdArgs.push_back(Args.MakeArgString(Twine("--plugin-opt=tapir-target=") +
+                                       (A ? A->getValue() : "opencilk")));
+  if (*Target == llvm::TapirTargetID::OpenCilk)
+    TC.AddOpenCilkABIBitcode(Args, CmdArgs, /*IsLTO=*/true);
 }
 
 void tools::addPathIfExists(const Driver &D, const Twine &Path,

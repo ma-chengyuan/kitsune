@@ -4768,3 +4768,11 @@ def ArithmeticFence : LangBuiltin<"ALL_LANGUAGES"> {
   let Attributes = [CustomTypeChecking, Constexpr];
   let Prototype = "void(...)";
 }
+
+// Tapir.  Rewriting of reducer references happens during sema
+// and needs a builtin to carry the information to codegen.
+def HyperLookup : Builtin {
+  let Spellings = ["__hyper_lookup"];
+  let Attributes = [NoThrow, Pure];
+  let Prototype = "void*(void const*, size_t, ...)";
+}

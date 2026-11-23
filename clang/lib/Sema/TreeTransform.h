@@ -20,12 +20,14 @@
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/ExprCilk.h"
 #include "clang/AST/ExprConcepts.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
 #include "clang/AST/OpenMPClause.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtCXX.h"
+#include "clang/AST/StmtCilk.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/AST/StmtOpenACC.h"
 #include "clang/AST/StmtOpenMP.h"
@@ -1292,6 +1294,9 @@ public:
   QualType RebuildDependentBitIntType(bool IsUnsigned, Expr *NumBitsExpr,
                                       SourceLocation Loc);
 
+  QualType RebuildHyperobjectType(QualType ElementType, Expr *I,
+                                  Expr *R, SourceLocation Loc);
+
   /// Build a new template name given a nested name specifier, a flag
   /// indicating whether the "template" keyword was provided, and the template
   /// that the template name refers to.
@@ -1487,6 +1492,39 @@ public:
                                   Inc, RParenLoc, Body);
   }
 
+  /// Build a new Cilk for statement.
+  ///
+  /// By default, performs semantic analysis to build the new statement.
+  /// Subclasses may override this routine to provide different behavior.
+  StmtResult RebuildCilkForStmt(SourceLocation ForLoc, SourceLocation LParenLoc,
+                                Stmt *Init, Stmt *Limit,
+                                Sema::ConditionResult InitCond, Stmt *Begin,
+                                Stmt *End, Sema::ConditionResult Cond,
+                                Sema::FullExprArg Inc, SourceLocation RParenLoc,
+                                Stmt *LoopVar, Stmt *Body, Expr *OgCond,
+                                Expr *OgInc) {
+    return getSema().ActOnCilkForStmt(
+        ForLoc, LParenLoc, Init, cast_or_null<DeclStmt>(Limit), InitCond,
+        cast_or_null<DeclStmt>(Begin), cast_or_null<DeclStmt>(End), Cond, Inc,
+        RParenLoc, Body, cast_or_null<DeclStmt>(LoopVar), OgCond, OgInc);
+  }
+
+  /// Build a new Cilk for range statement.
+  ///
+  /// By default, performs semantic analysis to build the new statement.
+  /// Subclasses may override this routine to provide different behavior.
+  StmtResult RebuildCilkForRangeStmt(Stmt *ForRange) {
+    // We don't reconstruct the for range from its constituent parts,
+    // but rather let the CXXForRange do the rebuild, and then recompute
+    // all our fields by building it again.
+    return getSema().BuildCilkForRangeStmt(
+        cast_or_null<CXXForRangeStmt>(ForRange));
+  }
+  StmtResult FinishCilkForRangeStmt(Stmt *ForRange, Stmt *Body) {
+    return getSema().FinishCilkForRangeStmt(ForRange, Body);
+  }
+
+
   /// Build a new goto statement.
   ///
   /// By default, performs semantic analysis to build the new statement.
@@ -1520,6 +1558,30 @@ public:
   /// Subclasses may override this routine to provide different behavior.
   StmtResult RebuildSpawnStmt(SourceLocation SpawnLoc, StringRef SV, Stmt *S) {
     return getSema().ActOnSpawnStmt(SpawnLoc, SV, S);
+  }
+
+  /// Build a new Cilk spawn statment.
+  ///
+  /// By default, performs semantic analysis to build the new expression.
+  /// Subclasses may override this routine to provide different behavior.
+  StmtResult RebuildCilkSpawnStmt(SourceLocation SpawnLoc, Stmt *S) {
+    return getSema().ActOnCilkSpawnStmt(SpawnLoc, S);
+  }
+
+  /// Build a new Cilk spawn expression.
+  ///
+  /// By default, performs semantic analysis to build the new expression.
+  /// Subclasses may override this routine to provide different behavior.
+  ExprResult RebuildCilkSpawnExpr(SourceLocation SpawnLoc, Expr *E) {
+    return getSema().ActOnCilkSpawnExpr(SpawnLoc, E);
+  }
+
+  /// Build a new Cilk scope statment.
+  ///
+  /// By default, performs semantic analysis to build the new expression.
+  /// Subclasses may override this routine to provide different behavior.
+  StmtResult RebuildCilkScopeStmt(SourceLocation ScopeLoc, Stmt *S) {
+    return getSema().ActOnCilkScopeStmt(ScopeLoc, S);
   }
 
   /// Build a new declaration statement.
@@ -5321,6 +5383,36 @@ QualType TreeTransform<Derived>::TransformComplexType(TypeLocBuilder &TLB,
                                                       ComplexTypeLoc T) {
   // FIXME: recurse?
   return TransformTypeSpecType(TLB, T);
+}
+
+template <typename Derived>
+QualType
+TreeTransform<Derived>::TransformHyperobjectType(TypeLocBuilder &TLB,
+                                                 HyperobjectTypeLoc TL) {
+  ExprResult NewR, NewI;
+  {
+    const HyperobjectType *H = TL.getTypePtr();
+    EnterExpressionEvaluationContext Context(
+        SemaRef, Sema::ExpressionEvaluationContext::PotentiallyEvaluated);
+    NewR = getDerived().TransformExpr(H->getReduce());
+    NewI = getDerived().TransformExpr(H->getIdentity());
+  }
+  if (NewR.isInvalid() || NewI.isInvalid())
+    return QualType();
+
+  QualType ElementType = getDerived().TransformType(TLB, TL.getPointeeLoc());
+  if (ElementType.isNull())
+    return QualType();
+
+  QualType Result =
+    getDerived().RebuildHyperobjectType(ElementType, NewI.get(),
+                                        NewR.get(), TL.getHyperLoc());
+  if (Result.isNull())
+    return QualType();
+
+  HyperobjectTypeLoc NewT = TLB.push<HyperobjectTypeLoc>(Result);
+  NewT.setHyperLoc(TL.getHyperLoc());
+  return Result;
 }
 
 template <typename Derived>
@@ -16446,6 +16538,13 @@ QualType TreeTransform<Derived>::RebuildDependentBitIntType(
 }
 
 template<typename Derived>
+QualType TreeTransform<Derived>::RebuildHyperobjectType(QualType ElementType,
+                                                        Expr *I, Expr *R,
+                                                        SourceLocation Loc) {
+  return SemaRef.BuildHyperobjectType(ElementType, I, R, Loc);
+}
+
+template<typename Derived>
 TemplateName
 TreeTransform<Derived>::RebuildTemplateName(CXXScopeSpec &SS,
                                             bool TemplateKW,
@@ -16728,6 +16827,172 @@ template<typename Derived>
 StmtResult
 TreeTransform<Derived>::TransformSyncStmt(SyncStmt *S) {
   return S;
+}
+
+template<typename Derived>
+StmtResult
+TreeTransform<Derived>::TransformCilkSpawnStmt(CilkSpawnStmt *S) {
+  StmtResult Child = getDerived().TransformStmt(S->getSpawnedStmt());
+  if (Child.isInvalid())
+    return StmtError();
+
+  if (!getDerived().AlwaysRebuild() && Child.get() == S->getSpawnedStmt())
+    return S;
+
+  return getDerived().RebuildCilkSpawnStmt(S->getSpawnLoc(), Child.get());
+}
+
+template<typename Derived>
+ExprResult
+TreeTransform<Derived>::TransformCilkSpawnExpr(CilkSpawnExpr *E) {
+  ExprResult SpawnedExpr = getDerived().TransformExpr(E->getSpawnedExpr());
+  if (SpawnedExpr.isInvalid())
+    return ExprError();
+
+  if (!getDerived().AlwaysRebuild() && SpawnedExpr.get() == E->getSpawnedExpr())
+    return E;
+
+  return getDerived().RebuildCilkSpawnExpr(E->getSpawnLoc(), SpawnedExpr.get());
+}
+
+template<typename Derived>
+StmtResult
+TreeTransform<Derived>::TransformCilkSyncStmt(CilkSyncStmt *S) {
+  return S;
+}
+
+template<typename Derived>
+StmtResult
+TreeTransform<Derived>::TransformCilkScopeStmt(CilkScopeStmt *S) {
+  StmtResult Child = getDerived().TransformStmt(S->getBody());
+  if (Child.isInvalid())
+    return StmtError();
+
+  if (!getDerived().AlwaysRebuild() && Child.get() == S->getBody())
+    return S;
+
+  return getDerived().RebuildCilkScopeStmt(S->getScopeLoc(), Child.get());
+}
+
+template<typename Derived>
+StmtResult
+TreeTransform<Derived>::TransformCilkForStmt(CilkForStmt *S) {
+  // Transform the initialization statement
+  StmtResult Init = getDerived().TransformStmt(S->getInit());
+  if (Init.isInvalid())
+    return StmtError();
+
+  // Transform the limit statement
+  StmtResult Limit;
+  if (S->getLimitStmt()) {
+    Limit = getDerived().TransformStmt(S->getLimitStmt());
+    if (Limit.isInvalid())
+      return StmtError();
+  }
+
+  // Transform the init-condition statement
+  Sema::ConditionResult InitCond;
+  if (S->getInitCond()) {
+    InitCond = getDerived().TransformCondition(
+        S->getCilkForLoc(), nullptr, S->getInitCond(),
+        Sema::ConditionKind::Boolean);
+    if (InitCond.isInvalid())
+      return StmtError();
+  }
+
+  // Transform the begin statement
+  StmtResult Begin;
+  if (S->getBeginStmt()) {
+    Begin = getDerived().TransformStmt(S->getBeginStmt());
+    if (Begin.isInvalid())
+      return StmtError();
+  }
+
+  // Transform the end statement
+  StmtResult End;
+  if (S->getEndStmt()) {
+    End = getDerived().TransformStmt(S->getEndStmt());
+    if (End.isInvalid())
+      return StmtError();
+  }
+
+  // // In OpenMP loop region loop control variable must be captured and be
+  // // private. Perform analysis of first part (if any).
+  // if (getSema().getLangOpts().OpenMP && Init.isUsable())
+  //   getSema().ActOnOpenMPLoopInitialization(S->getCilkForLoc(), Init.get());
+
+  // Transform the condition
+  Sema::ConditionResult Cond = getDerived().TransformCondition(
+      S->getCilkForLoc(), nullptr, S->getCond(),
+      Sema::ConditionKind::Boolean);
+  if (Cond.isInvalid())
+    return StmtError();
+
+  // Transform the increment
+  ExprResult Inc = getDerived().TransformExpr(S->getInc());
+  if (Inc.isInvalid())
+    return StmtError();
+
+  Sema::FullExprArg FullInc(getSema().MakeFullDiscardedValueExpr(Inc.get()));
+  if (S->getInc() && !FullInc.get())
+    return StmtError();
+
+  // Transform the extracted loop-variable declaration
+  StmtResult LoopVar;
+  if (DeclStmt *LV = S->getLoopVarStmt()) {
+    LoopVar = getDerived().TransformStmt(LV);
+    if (LoopVar.isInvalid())
+      return StmtError();
+  }
+
+  // Transform the original init, condition, and increment statements
+  ExprResult OgCond = getDerived().TransformExpr(S->getOriginalCond());
+  if (OgCond.isInvalid())
+    return StmtError();
+  ExprResult OgInc = getDerived().TransformExpr(S->getOriginalInc());
+  if (OgInc.isInvalid())
+    return StmtError();
+
+  // Transform loop body
+  StmtResult Body = getDerived().TransformStmt(S->getBody());
+  if (Body.isInvalid())
+    return StmtError();
+
+  if (!getDerived().AlwaysRebuild() &&
+      Init.get() == S->getInit() &&
+      Limit.get() == S->getLimitStmt() &&
+      InitCond.get() == std::make_pair((clang::VarDecl*)nullptr,
+                                       S->getInitCond()) &&
+      Begin.get() == S->getBeginStmt() &&
+      End.get() == S->getEndStmt() &&
+      Cond.get() == std::make_pair((clang::VarDecl*)nullptr, S->getCond()) &&
+      Inc.get() == S->getInc() &&
+      LoopVar.get() == S->getLoopVarStmt() &&
+      Body.get() == S->getBody() &&
+      OgCond.get() == S->getOriginalCond() &&
+      OgInc.get() == S->getOriginalInc())
+    return S;
+
+  return getDerived().RebuildCilkForStmt(
+      S->getCilkForLoc(), S->getLParenLoc(), Init.get(), Limit.get(), InitCond,
+      Begin.get(), End.get(), Cond, FullInc, S->getRParenLoc(), LoopVar.get(),
+      Body.get(), OgCond.get(), OgInc.get());
+}
+
+template<typename Derived>
+StmtResult
+TreeTransform<Derived>::TransformCilkForRangeStmt(CilkForRangeStmt *S) {
+  StmtResult ForRange = getDerived().TransformStmt(S->getCXXForRangeStmt());
+  if (ForRange.isInvalid())
+    return StmtError();
+
+  StmtResult CilkForRange =
+      getDerived().RebuildCilkForRangeStmt(ForRange.get());
+  if (CilkForRange.isInvalid())
+    return StmtError();
+
+  return getDerived().FinishCilkForRangeStmt(
+      CilkForRange.get(), cast<CXXForRangeStmt>(ForRange.get())->getBody());
 }
 
 } // end namespace clang

@@ -716,9 +716,15 @@ void CodeGenFunction::EmitInitializerForField(FieldDecl *Field, LValue LHS,
   }
   }
 
+  ReducerCallbacks RCB;
+  bool IsReducer = getReducer(Field, RCB);
+  if (IsReducer)
+    EmitReducerInit(Field, RCB, LHS.getPointer(*this));
+
   // Ensure that we destroy this object if an exception is thrown
   // later in the constructor.
-  QualType::DestructionKind dtorKind = FieldType.isDestructedType();
+  QualType::DestructionKind dtorKind =
+      IsReducer ? QualType::DK_hyperobject : FieldType.isDestructedType();
   if (needsEHCleanup(dtorKind))
     pushEHDestroy(dtorKind, LHS.getAddress(), FieldType);
 }
@@ -1954,7 +1960,10 @@ void CodeGenFunction::EnterDtorCleanups(const CXXDestructorDecl *DD,
       SanitizeBuilder.PushCleanupForField(Field);
 
     QualType type = Field->getType();
-    QualType::DestructionKind dtorKind = type.isDestructedType();
+    ReducerCallbacks RCB;
+    QualType::DestructionKind dtorKind =
+        getReducer(Field, RCB) ? QualType::DK_hyperobject
+                               : type.isDestructedType();
     if (!dtorKind)
       continue;
 
@@ -2109,6 +2118,7 @@ void CodeGenFunction::EmitCXXAggrConstructorCall(const CXXConstructorDecl *ctor,
 void CodeGenFunction::destroyCXXObject(CodeGenFunction &CGF,
                                        Address addr,
                                        QualType type) {
+  type = type.stripHyperobject();
   const RecordType *rtype = type->castAs<RecordType>();
   const CXXRecordDecl *record = cast<CXXRecordDecl>(rtype->getDecl());
   const CXXDestructorDecl *dtor = record->getDestructor();

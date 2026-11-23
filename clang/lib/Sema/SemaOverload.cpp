@@ -19,6 +19,7 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DependenceFlags.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/ExprCilk.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/Type.h"
@@ -136,6 +137,7 @@ ImplicitConversionRank clang::GetConversionRank(ImplicitConversionKind Kind) {
       ICR_Exact_Match,
       ICR_Exact_Match,
       ICR_Exact_Match,
+      ICR_Exact_Match,
       ICR_Promotion,
       ICR_Promotion,
       ICR_Promotion,
@@ -200,6 +202,7 @@ static const char *GetImplicitConversionName(ImplicitConversionKind Kind) {
       "Lvalue-to-rvalue",
       "Array-to-pointer",
       "Function-to-pointer",
+      "Hyperobject to view",
       "Function pointer conversion",
       "Qualification",
       "Integral promotion",
@@ -1713,7 +1716,7 @@ TryImplicitConversion(Sema &S, Expr *From, QualType ToType,
   //   given Conversion rank, in spite of the fact that a copy/move
   //   constructor (i.e., a user-defined conversion function) is
   //   called for those cases.
-  QualType FromType = From->getType();
+  QualType FromType = From->getType().stripHyperobject();
   if (ToType->getAs<RecordType>() && FromType->getAs<RecordType>() &&
       (S.Context.hasSameUnqualifiedType(FromType, ToType) ||
        S.IsDerivedFrom(From->getBeginLoc(), FromType, ToType))) {
@@ -2080,7 +2083,7 @@ static bool IsStandardConversion(Sema &S, Expr* From, QualType ToType,
                                  StandardConversionSequence &SCS,
                                  bool CStyle,
                                  bool AllowObjCWritebackConversion) {
-  QualType FromType = From->getType();
+  QualType FromType = From->getType().stripHyperobject();
 
   // Standard conversions (C++ [conv])
   SCS.setAsIdentityConversion();
@@ -5049,6 +5052,14 @@ TryReferenceInit(Sema &S, Expr *Init, QualType DeclType,
       T2 = Fn->getType();
   }
 
+  // OpenCilk: If the right hand side is a hyperobject, see if the
+  // left hand side wants the hyperobject or a view.
+  bool LookupView = false;
+  if (T2->isHyperobjectType() && !T1->isHyperobjectType()) {
+    LookupView = true;
+    T2 = T2.stripHyperobject();
+  }
+
   // Compute some basic properties of the types and the initializer.
   bool isRValRef = DeclType->isRValueReferenceType();
   Expr::Classification InitCategory = Init->Classify(S.Context);
@@ -5110,6 +5121,8 @@ TryReferenceInit(Sema &S, Expr *Init, QualType DeclType,
       //   in which case the implicit conversion sequence is a
       //   derived-to-base Conversion (13.3.3.1).
       SetAsReferenceBinding(/*BindsDirectly=*/true);
+      if (LookupView)
+        ICS.Standard.First = ICK_Hyperobject_To_View;
 
       // Nothing more to do: the inaccessibility/ambiguity check for
       // derived-to-base conversions is suppressed when we're
@@ -6000,6 +6013,7 @@ static bool CheckConvertedConstantConversions(Sema &S,
   case ICK_Array_To_Pointer:
   case ICK_Function_To_Pointer:
   case ICK_HLSL_Array_RValue:
+  case ICK_Hyperobject_To_View:
     llvm_unreachable("found a first conversion kind in Second");
 
   case ICK_Function_Conversion:
@@ -14178,6 +14192,9 @@ Sema::CreateOverloadedUnaryOp(SourceLocation OpLoc, UnaryOperatorKind Opc,
   if (checkPlaceholderForOverload(*this, Input))
     return ExprError();
 
+  if (Input->getType()->isHyperobjectType())
+    Input = BuildHyperobjectLookup(Input, false);
+
   Expr *Args[2] = { Input, nullptr };
   unsigned NumArgs = 1;
 
@@ -14364,6 +14381,11 @@ void Sema::LookupOverloadedBinOp(OverloadCandidateSet &CandidateSet,
                                  OverloadedOperatorKind Op,
                                  const UnresolvedSetImpl &Fns,
                                  ArrayRef<Expr *> Args, bool PerformADL) {
+  assert(Args[0]->getType()->getTypeClass() != Type::Hyperobject &&
+         "hyperobjects not allowed in overloading");
+  assert(Args[1]->getType()->getTypeClass() != Type::Hyperobject &&
+         "hyperobjects not allowed in overloading");
+
   SourceLocation OpLoc = CandidateSet.getLocation();
 
   OverloadedOperatorKind ExtraOp =
@@ -14517,6 +14539,22 @@ ExprResult Sema::CreateOverloadedBinOp(SourceLocation OpLoc,
   OverloadCandidateSet::iterator Best;
   switch (CandidateSet.BestViableFunction(*this, OpLoc, Best)) {
     case OR_Success: {
+      // If the RHS is spawned and the operator is an assignment, then we
+      // actually want to spawn the the top-level call.
+      bool SpawnTheCall = false;
+      SourceLocation SpawnLoc;
+      // TODO: Generalize this condition.
+      if (BinaryOperator::isAssignmentOp(Opc)) {
+        if (CilkSpawnExpr *Spawn = dyn_cast<CilkSpawnExpr>(Args[1])) {
+          SpawnTheCall = true;
+          SpawnLoc = Spawn->getExprLoc();
+          if (ExprWithCleanups *EWC =
+              dyn_cast<ExprWithCleanups>(Spawn->getSpawnedExpr()))
+            Args[1] = RHS = EWC->getSubExpr();
+          else
+            Args[1] = RHS = Spawn->getSpawnedExpr();
+        }
+      }
       // We found a built-in operator or an overloaded operator.
       FunctionDecl *FnDecl = Best->Function;
 
@@ -14758,6 +14796,9 @@ ExprResult Sema::CreateOverloadedBinOp(SourceLocation OpLoc,
         // Make a note in the AST if we did any rewriting.
         if (Best->RewriteKind != CRK_None)
           R = new (Context) CXXRewrittenBinaryOperator(R.get(), IsReversed);
+
+        if (SpawnTheCall)
+          return ActOnCilkSpawnExpr(SpawnLoc, R.get());
 
         return R;
       } else {

@@ -437,6 +437,7 @@ static DeclaratorChunk *maybeMovePastReturnType(Declarator &declarator,
     case DeclaratorChunk::Reference:
     case DeclaratorChunk::MemberPointer:
     case DeclaratorChunk::Pipe:
+    case DeclaratorChunk::Hyperobject:
       return result;
 
     // If we do find a function declarator, scan inwards from that,
@@ -450,6 +451,7 @@ static DeclaratorChunk *maybeMovePastReturnType(Declarator &declarator,
         case DeclaratorChunk::Function:
         case DeclaratorChunk::Reference:
         case DeclaratorChunk::Pipe:
+        case DeclaratorChunk::Hyperobject:
           continue;
 
         case DeclaratorChunk::MemberPointer:
@@ -530,6 +532,7 @@ static void distributeObjCPointerTypeAttr(TypeProcessingState &state,
     case DeclaratorChunk::Reference:
     case DeclaratorChunk::MemberPointer:
     case DeclaratorChunk::Pipe:
+    case DeclaratorChunk::Hyperobject:
       goto error;
     }
   }
@@ -561,6 +564,7 @@ static void distributeObjCPointerTypeAttrFromDeclarator(
     case DeclaratorChunk::Paren:
     case DeclaratorChunk::Array:
     case DeclaratorChunk::Pipe:
+    case DeclaratorChunk::Hyperobject:
       continue;
 
     case DeclaratorChunk::Function:
@@ -622,6 +626,7 @@ static void distributeFunctionTypeAttr(TypeProcessingState &state,
     case DeclaratorChunk::Reference:
     case DeclaratorChunk::MemberPointer:
     case DeclaratorChunk::Pipe:
+    case DeclaratorChunk::Hyperobject:
       continue;
     }
   }
@@ -873,6 +878,80 @@ TSTToUnaryTransformType(DeclSpec::TST SwitchTST) {
   default:
     llvm_unreachable("attempted to parse a non-unary transform builtin");
   }
+}
+
+static std::optional<unsigned> DeclContainsHyperobject(const RecordDecl *Decl);
+
+// It is forbidden to add new bits to the Type class so there is no
+// room for a cached or precomputed flag.  Do a deep search on every
+// hyperobject type creation.
+static std::optional<unsigned> ContainsHyperobject(QualType Outer) {
+  const Type *T = Outer.getCanonicalType().getTypePtr();
+  if (T->isVariablyModifiedType())
+    return diag::variable_length_hyperobject;
+  if (T->isDependentType())
+    return std::optional<unsigned>();
+  QualType Inner;
+  switch (T->getTypeClass()) {
+  case Type::Hyperobject:
+    return diag::nested_hyperobject;
+  case Type::Typedef:
+    Inner = cast<TypedefType>(T)->desugar();
+    break;
+  case Type::ConstantArray:
+  case Type::IncompleteArray:
+  case Type::VariableArray:
+  case Type::DependentSizedArray:
+    Inner = cast<ArrayType>(T)->getElementType();
+    break;
+  case Type::Complex:
+    Inner = cast<ComplexType>(T)->getElementType();
+    break;
+  case Type::Record: {
+    const RecordDecl *Decl = cast<RecordType>(T)->getDecl();
+    if (const RecordDecl *Def = Decl->getDefinition())
+      return DeclContainsHyperobject(Def);
+    return diag::confusing_hyperobject;
+  }
+  case Type::TypeOf:
+    Inner = cast<TypeOfType>(T)->getUnmodifiedType();
+    break;
+  case Type::TypeOfExpr:
+    Inner = cast<TypeOfExprType>(T)->getUnderlyingExpr()->getType();
+    break;
+  case Type::Decltype:
+    Inner = cast<DecltypeType>(T)->getUnderlyingType();
+    break;
+  case Type::Auto:
+  case Type::DeducedTemplateSpecialization:
+    Inner = cast<DeducedType>(T)->desugar();
+    break;
+  case Type::TemplateSpecialization:
+  case Type::DependentName:
+  case Type::DependentTemplateSpecialization:
+  case Type::PackExpansion:
+  case Type::UnaryTransform:
+  case Type::LValueReference:
+  case Type::RValueReference:
+  case Type::BlockPointer:
+  case Type::FunctionProto:
+  case Type::FunctionNoProto:
+    return diag::confusing_hyperobject;
+  case Type::Builtin:
+  case Type::TemplateTypeParm:
+  default:
+    return std::optional<unsigned>();
+  }
+  return ContainsHyperobject(Inner);
+}
+
+static std::optional<unsigned> DeclContainsHyperobject(const RecordDecl *Decl) {
+  if (Decl->isInvalidDecl())
+    return std::optional<unsigned>();
+  for (const FieldDecl *FD : Decl->fields())
+    if (std::optional<unsigned> O = ContainsHyperobject(FD->getType()))
+      return O;
+  return std::optional<unsigned>();
 }
 
 /// Convert the specified declspec to the appropriate type
@@ -1908,6 +1987,114 @@ QualType Sema::BuildReferenceType(QualType T, bool SpelledAsLValue,
   return Context.getRValueReferenceType(T);
 }
 
+// Return value is always non-null.
+Expr *Sema::ValidateReducerCallback(Expr *E, unsigned NumArgs,
+                                    SourceLocation Loc) {
+  if (!E)
+    E = new (Context) CXXNullPtrLiteralExpr(Context.NullPtrTy, Loc);
+
+  QualType T = E->getType();
+
+  // If the type is dependent it will be checked again later, if necessary.
+  if (T->isDependentType() || T == Context.VoidPtrTy)
+    return E;
+
+  if (T->isNullPtrType())
+    return ImplicitCastExpr::Create(Context, Context.VoidPtrTy,
+                                    CK_NullToPointer, E, nullptr, VK_PRValue,
+                                    FPOptionsOverride());
+
+  if (T->isFunctionType()) {
+    E = ImplicitCastExpr::Create(Context, Context.getPointerType(T),
+                                 CK_FunctionToPointerDecay, E, nullptr,
+                                 VK_PRValue, FPOptionsOverride());
+    T = E->getType(); // Context.getDecayedType(T);
+  }
+
+  CastKind Cast = CK_BitCast;
+
+  if (const IntegerLiteral *L = dyn_cast<IntegerLiteral>(E)) {
+    if (L->getValue().isZero())
+      return ImplicitCastExpr::Create(Context, Context.VoidPtrTy,
+                                      CK_NullToPointer, E, nullptr, VK_PRValue,
+                                      FPOptionsOverride());
+    Cast = CK_IntegralToPointer;
+  }
+
+  // TODO: The compiler should allow
+  // Ptr = Context.getPointerType(Element)
+  // and generate a thunk that accepts void *.
+
+  QualType Ptr = Context.VoidPtrTy;
+  llvm::SmallVector<QualType, 2> ArgTy;
+  ArgTy.push_back(Ptr);
+  if (NumArgs > 1) {
+    ArgTy.push_back(Ptr);
+    assert(NumArgs == 2);
+  }
+  // TODO: Give these types names for better error messages.
+  QualType FnTy =
+      BuildFunctionType(Context.VoidTy, ArgTy, E->getExprLoc(),
+                        DeclarationName(), FunctionProtoType::ExtProtoInfo());
+  FnTy = BuildPointerType(FnTy, E->getExprLoc(), DeclarationName());
+
+  if (T == Context.OverloadTy) {
+    DeclAccessPair What;
+    bool Multiple = false;
+    if (FunctionDecl *F = ResolveAddressOfOverloadedFunction(E, FnTy, true,
+                                                             What, &Multiple)) {
+      T = F->getType();
+      E = BuildDeclRefExpr(F, T, VK_LValue, E->getExprLoc());
+      T = Context.getPointerType(T);
+      E = ImplicitCastExpr::Create(Context, T, CK_FunctionToPointerDecay, E,
+                                   nullptr, VK_PRValue, FPOptionsOverride());
+    }
+  }
+
+  AssignConvertType Mismatch =
+      CheckAssignmentConstraints(E->getExprLoc(), FnTy, T);
+
+  if (DiagnoseAssignmentResult(Mismatch, E->getExprLoc(), FnTy, T, E,
+                               AA_Passing)) {
+    E = new (Context) CXXNullPtrLiteralExpr(Context.NullPtrTy, E->getExprLoc());
+    Cast = CK_NullToPointer;
+  } else if (Mismatch == IntToPointer) {
+    Cast = CK_IntegralToPointer;
+  }
+
+  return ImplicitCastExpr::Create(Context, Context.VoidPtrTy, Cast, E, nullptr,
+                                  VK_PRValue, FPOptionsOverride());
+}
+
+QualType Sema::BuildHyperobjectType(QualType Element, Expr *Identity,
+                                    Expr *Reduce, SourceLocation Loc) {
+  // This function must return a HyperobjectType with the given
+  // element type, otherwise the rest of the front end will get angry.
+  // Template instantiation is quite strict about preserving structure.
+  // The compiler will also get angry if the element type is incomplete
+  // and the HyperobjectType is not marked as containing an error.
+  if (!RequireCompleteType(Loc, Element, CompleteTypeKind::Normal,
+                           diag::incomplete_hyperobject)) {
+    if (std::optional<unsigned> Code = ContainsHyperobject(Element))
+      Diag(Loc, *Code) << Element;
+  }
+
+  if (!Element->isObjectType())
+    Diag(Loc, diag::confusing_hyperobject) << Element;
+
+  if (Element.isConstQualified() || Element.isVolatileQualified()) {
+    Diag(Loc, diag::qualified_hyperobject) << Element;
+    // Volatile reducers generate confusing diagnostics when used.
+    Element.removeLocalVolatile();
+  }
+
+  Identity = ValidateReducerCallback(Identity, 1, Loc);
+  Reduce = ValidateReducerCallback(Reduce, 2, Loc);
+
+  // The result will be marked erroneous if Element is incomplete.
+  return Context.getHyperobjectType(Element, Identity, Reduce);
+}
+
 QualType Sema::BuildReadPipeType(QualType T, SourceLocation Loc) {
   return Context.getReadPipeType(T);
 }
@@ -2789,6 +2976,7 @@ static void inferARCWriteback(TypeProcessingState &state,
     case DeclaratorChunk::Function:
     case DeclaratorChunk::MemberPointer:
     case DeclaratorChunk::Pipe:
+    case DeclaratorChunk::Hyperobject:
       return;
     }
   }
@@ -2931,6 +3119,7 @@ static void diagnoseRedundantReturnTypeQualifiers(Sema &S, QualType RetTy,
     case DeclaratorChunk::Array:
     case DeclaratorChunk::MemberPointer:
     case DeclaratorChunk::Pipe:
+    case DeclaratorChunk::Hyperobject:
       // FIXME: We can't currently provide an accurate source location and a
       // fix-it hint for these.
       unsigned AtomicQual = RetTy->isAtomicType() ? DeclSpec::TQ_atomic : 0;
@@ -3567,6 +3756,8 @@ static void warnAboutRedundantParens(Sema &S, Declarator &D, QualType T) {
       CouldBeTemporaryObject = false;
       continue;
 
+    case DeclaratorChunk::Hyperobject:
+      // No idea where Hyperobject belongs.
     case DeclaratorChunk::BlockPointer:
     case DeclaratorChunk::MemberPointer:
     case DeclaratorChunk::Pipe:
@@ -3832,6 +4023,7 @@ classifyPointerDeclarator(Sema &S, QualType type, Declarator &declarator,
 
     case DeclaratorChunk::Function:
     case DeclaratorChunk::Pipe:
+    case DeclaratorChunk::Hyperobject:
       break;
 
     case DeclaratorChunk::BlockPointer:
@@ -4138,6 +4330,7 @@ static bool hasOuterPointerLikeChunk(const Declarator &D, unsigned endIndex) {
     case DeclaratorChunk::Function:
     case DeclaratorChunk::BlockPointer:
     case DeclaratorChunk::Pipe:
+    case DeclaratorChunk::Hyperobject:
       // These are invalid anyway, so just ignore.
       break;
     }
@@ -4280,6 +4473,7 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
           DiagKind = 2;
           break;
         case DeclaratorChunk::Pipe:
+        case DeclaratorChunk::Hyperobject:
           break;
         }
 
@@ -4335,6 +4529,7 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
       case DeclaratorChunk::Array:
       case DeclaratorChunk::Function:
       case DeclaratorChunk::Pipe:
+      case DeclaratorChunk::Hyperobject:
         break;
 
       case DeclaratorChunk::BlockPointer:
@@ -5346,6 +5541,12 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
                        D.getMutableDeclSpec().getAttributes());
       break;
     }
+
+    case DeclaratorChunk::Hyperobject: {
+      T = S.BuildHyperobjectType(T, DeclType.Hyper.Arg[0],
+                                 DeclType.Hyper.Arg[1], DeclType.Loc);
+      break;
+    }
     }
 
     if (T.isNull()) {
@@ -5735,6 +5936,7 @@ static void transferARCOwnership(TypeProcessingState &state,
     case DeclaratorChunk::Function:
     case DeclaratorChunk::MemberPointer:
     case DeclaratorChunk::Pipe:
+    case DeclaratorChunk::Hyperobject:
       return;
     }
   }
@@ -6179,6 +6381,9 @@ namespace {
     void VisitMatrixTypeLoc(MatrixTypeLoc TL) {
       fillMatrixTypeLoc(TL, Chunk.getAttrs());
     }
+    void VisitHyperobjectTypeLoc(HyperobjectTypeLoc TL) {
+      TL.setHyperLoc(Chunk.Loc);
+    }
 
     void VisitTypeLoc(TypeLoc TL) {
       llvm_unreachable("unsupported TypeLoc kind in declarator!");
@@ -6193,6 +6398,7 @@ static void fillAtomicQualLoc(AtomicTypeLoc ATL, const DeclaratorChunk &Chunk) {
   case DeclaratorChunk::Array:
   case DeclaratorChunk::Paren:
   case DeclaratorChunk::Pipe:
+  case DeclaratorChunk::Hyperobject:
     llvm_unreachable("cannot be _Atomic qualified");
 
   case DeclaratorChunk::Pointer:
@@ -7412,6 +7618,7 @@ static bool distributeNullabilityTypeAttr(TypeProcessingState &state,
     // Don't walk through these.
     case DeclaratorChunk::Reference:
     case DeclaratorChunk::Pipe:
+    case DeclaratorChunk::Hyperobject:
       return false;
     }
   }

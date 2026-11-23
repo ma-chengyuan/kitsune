@@ -2363,6 +2363,10 @@ void CodeGenModule::ConstructAttributeList(StringRef Name,
       FuncAttrs.addAttribute(llvm::Attribute::NoDuplicate);
     if (TargetDecl->hasAttr<ConvergentAttr>())
       FuncAttrs.addAttribute(llvm::Attribute::Convergent);
+    if (TargetDecl->hasAttr<StealableAttr>())
+      FuncAttrs.addAttribute(llvm::Attribute::Stealable);
+    if (TargetDecl->hasAttr<InjectiveAttr>())
+      FuncAttrs.addAttribute(llvm::Attribute::Injective);
 
     if (const FunctionDecl *Fn = dyn_cast<FunctionDecl>(TargetDecl)) {
       AddAttributesFromFunctionProtoType(
@@ -2408,8 +2412,24 @@ void CodeGenModule::ConstructAttributeList(StringRef Name,
       FuncAttrs.addMemoryAttr(llvm::MemoryEffects::inaccessibleOrArgMemOnly());
       FuncAttrs.addAttribute(llvm::Attribute::NoUnwind);
     }
+    if (TargetDecl->hasAttr<StrandPureAttr>()) {
+      FuncAttrs.addAttribute(llvm::Attribute::StrandPure);
+      FuncAttrs.addMemoryAttr(llvm::MemoryEffects::readOnly());
+      FuncAttrs.addAttribute(llvm::Attribute::NoUnwind);
+    }
+    if (TargetDecl->hasAttr<ReducerRegisterAttr>()) {
+      FuncAttrs.addAttribute(llvm::Attribute::ReducerRegister);
+    }
+    if (TargetDecl->hasAttr<ReducerUnregisterAttr>()) {
+      FuncAttrs.addAttribute(llvm::Attribute::ReducerUnregister);
+    }
+    if (TargetDecl->hasAttr<HyperViewAttr>()) {
+      FuncAttrs.addAttribute(llvm::Attribute::HyperView);
+    }
     if (TargetDecl->hasAttr<RestrictAttr>())
       RetAttrs.addAttribute(llvm::Attribute::NoAlias);
+    else if (TargetDecl->hasAttr<StrandMallocAttr>())
+      RetAttrs.addAttribute(llvm::Attribute::StrandNoAlias);
     if (TargetDecl->hasAttr<ReturnsNonNullAttr>() &&
         !CodeGenOpts.NullPointerIsValid)
       RetAttrs.addAttribute(llvm::Attribute::NonNull);

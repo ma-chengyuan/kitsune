@@ -1684,7 +1684,7 @@ void ToolChain::AddKitsunePreprocessorArgs(const ArgList &Args,
                           Args);
   }
 
-  if (TapirTarget or IsKokkos) {
+  if ((TapirTarget && Args.hasArg(options::OPT_ftapir_EQ)) || IsKokkos) {
     std::string InclDir = concat(D.ResourceDir, "include");
     CmdArgs.push_back(Args.MakeArgString(StringRef("-I") + InclDir));
   }
@@ -1759,6 +1759,7 @@ static StringRef getArchNameForOpenCilkRTLib(const ToolChain &TC,
 void ToolChain::AddKitsuneLinkerArgs(const ArgList &Args,
                                      ArgStringList &CmdArgs) const {
   std::optional<llvm::TapirTargetID> TapirTarget = parseTapirTarget(Args);
+  bool UseKitsuneRuntime = TapirTarget && Args.hasArg(options::OPT_ftapir_EQ);
   bool IsKokkos = D.CCCIsCXX() && Args.hasArg(options::OPT_fkokkos);
 
   if (TapirTarget) {
@@ -1776,6 +1777,11 @@ void ToolChain::AddKitsuneLinkerArgs(const ArgList &Args,
       break;
 
     case llvm::TapirTargetID::OpenCilk: {
+      if (!UseKitsuneRuntime &&
+          Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs,
+                      options::OPT_r))
+        break;
+
       bool StaticOpenCilk = Args.hasArg(options::OPT_static);
       bool UseAsan = getSanitizerArgs(Args).needsAsanRt();
 
@@ -1802,6 +1808,9 @@ void ToolChain::AddKitsuneLinkerArgs(const ArgList &Args,
       // Add to the executable's runpath the default directory containing
       // OpenCilk runtime.
       addOpenCilkRuntimeRunPath(*this, Args, CmdArgs, Triple);
+
+      if (!UseKitsuneRuntime)
+        CmdArgs.push_back("-lpthread");
 
       ExtractArgsFromString(KITSUNE_OPENCILK_EXTRA_LINKER_FLAGS, CmdArgs, Args);
       break;
@@ -1837,7 +1846,7 @@ void ToolChain::AddKitsuneLinkerArgs(const ArgList &Args,
 
   // We always link in libkitrt if a TapirTarget or special Kokkos handling has
   // been specified.
-  if (TapirTarget or IsKokkos) {
+  if (UseKitsuneRuntime || IsKokkos) {
     // The pthread functions are now part of libc and was removed from glibc
     // 2.34. There is no need to explicitly link this in unless we have older
     // versions of libc around. We should consider removing this from here at
@@ -1975,27 +1984,38 @@ std::string ToolChain::getOpenCilkRTBasename(const ArgList &Args,
 
 std::string ToolChain::getOpenCilkRT(const ArgList &Args, StringRef Component,
                                      FileType Type) const {
-  // Check for runtime files without the architecture first.
-  std::string RTBasename =
+  bool ExplicitTapirTarget = Args.hasArg(options::OPT_ftapir_EQ);
+  const std::string RTBasename =
       getOpenCilkRTBasename(Args, Component, Type, /*AddArch=*/false);
-  for (const auto &LibPath : getLibraryPaths()) {
-    SmallString<128> P(LibPath);
-    llvm::sys::path::append(P, RTBasename);
-    if (getVFS().exists(P))
-      // If we found the library in LibraryPaths, let the linker resolve it.
-      return std::string(("-l" + Component).str());
+  if (ExplicitTapirTarget) {
+    for (const auto &LibPath : getLibraryPaths()) {
+      SmallString<128> P(LibPath);
+      llvm::sys::path::append(P, RTBasename);
+      if (getVFS().exists(P))
+        return ("-l" + Component).str();
+    }
   }
 
-  // Fall back to the OpenCilk name with the arch if the no-arch version does
-  // not exist.
-  RTBasename = getOpenCilkRTBasename(Args, Component, Type, /*AddArch=*/true);
   if (std::optional<std::string> RuntimePath = getOpenCilkRuntimePath(Args)) {
-    SmallString<128> P(*RuntimePath);
-    llvm::sys::path::append(P, RTBasename);
-    if (getVFS().exists(P))
-      return std::string(P.str());
+    // Use the same resource directory for ABI bitcode and runtime libraries
+    // when OpenCilk selects its default Tapir target.
+    if (!ExplicitTapirTarget) {
+      SmallString<128> P(*RuntimePath);
+      llvm::sys::path::append(P, RTBasename);
+      if (getVFS().exists(P))
+        return P.str().str();
+    }
+
+    SmallString<128> ArchPath(*RuntimePath);
+    llvm::sys::path::append(
+        ArchPath, getOpenCilkRTBasename(Args, Component, Type, /*AddArch=*/true));
+    if (getVFS().exists(ArchPath))
+      return ArchPath.str().str();
   }
 
-  // Otherwise, trust the linker to find the library on the system.
-  return std::string(("-l" + Component).str());
+  if (ExplicitTapirTarget)
+    return ("-l" + Component).str();
+
+  getDriver().Diag(diag::err_drv_opencilk_missing_runtime) << RTBasename;
+  return RTBasename;
 }

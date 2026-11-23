@@ -164,6 +164,7 @@ public:
   void VisitBinAssign(const BinaryOperator *E);
   void VisitBinComma(const BinaryOperator *E);
   void VisitBinCmp(const BinaryOperator *E);
+  void VisitCilkSpawnExpr(CilkSpawnExpr *E);
   void VisitCXXRewrittenBinaryOperator(CXXRewrittenBinaryOperator *E) {
     Visit(E->getSemanticForm());
   }
@@ -954,6 +955,19 @@ void AggExprEmitter::VisitCastExpr(CastExpr *E) {
   case CK_IntegralToFixedPoint:
     llvm_unreachable("cast kind invalid for aggregate types");
   }
+}
+
+void AggExprEmitter::VisitCilkSpawnExpr(CilkSpawnExpr *E) {
+  CGF.IsSpawned = true;
+  CGF.PushDetachScope();
+
+  Visit(E->getSpawnedExpr());
+
+  // Pop the detach scope
+  if (!(CGF.IsSpawned && CGF.CurDetachScope->IsDetachStarted()))
+    CGF.FailedSpawnWarning(E->getExprLoc());
+  CGF.IsSpawned = false;
+  CGF.PopDetachScope();
 }
 
 void AggExprEmitter::VisitCallExpr(const CallExpr *E) {

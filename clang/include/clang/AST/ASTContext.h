@@ -189,6 +189,7 @@ class ASTContext : public RefCountedBase<ASTContext> {
   mutable SmallVector<Type *, 0> Types;
   mutable llvm::FoldingSet<ExtQuals> ExtQualNodes;
   mutable llvm::FoldingSet<ComplexType> ComplexTypes;
+  mutable llvm::FoldingSet<HyperobjectType> HyperobjectTypes;
   mutable llvm::FoldingSet<PointerType> PointerTypes{GeneralTypesLog2InitSize};
   mutable llvm::FoldingSet<AdjustedType> AdjustedTypes;
   mutable llvm::FoldingSet<BlockPointerType> BlockPointerTypes;
@@ -1382,6 +1383,11 @@ public:
   QualType getComplexType(QualType T) const;
   CanQualType getComplexType(CanQualType T) const {
     return CanQualType::CreateUnsafe(getComplexType((QualType) T));
+  }
+
+  QualType getHyperobjectType(QualType T, Expr *I, Expr *R) const;
+  CanQualType getHyperobjectType(CanQualType T, Expr *I, Expr *R) const {
+    return CanQualType::CreateUnsafe(getHyperobjectType((QualType) T, I, R));
   }
 
   /// Return the uniqued reference to the type for a pointer to

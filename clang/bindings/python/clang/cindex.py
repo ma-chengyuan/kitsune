@@ -1384,6 +1384,24 @@ class CursorKind(BaseEnumeration):
     # OpenACC Compute Construct.
     OPEN_ACC_COMPUTE_DIRECTIVE = 320
 
+    # Cilk cilk_spawn statement.
+    CILK_SPAWN_STMT = 322
+
+    # Cilk wrapper for an expression preceded by cilk_spawn.
+    CILK_SPAWN_EXPR = 323
+
+    # Cilk cilk_sync statement.
+    CILK_SYNC_STMT = 324
+
+    # Cilk cilk_for statement.
+    CILK_FOR_STMT = 325
+
+    # Cilk cilk_scope statement.
+    CILK_SCOPE_STMT = 326
+
+    # Cilk cilk_for range statement.
+    CILK_FOR_RANGE_STMT = 327
+
     ###
     # Other Kinds
 
@@ -2340,6 +2358,7 @@ class TypeKind(BaseEnumeration):
     EXTVECTOR = 176
     ATOMIC = 177
     BTFTAGATTRIBUTED = 178
+    HYPEROBJECT = 179
 
 class RefQualifierKind(BaseEnumeration):
     """Describes a specific ref-qualifier of a type."""

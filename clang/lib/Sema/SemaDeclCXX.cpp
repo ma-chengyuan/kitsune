@@ -4950,7 +4950,7 @@ BuildImplicitMemberInitializer(Sema &SemaRef, CXXConstructorDecl *Constructor,
          "Unhandled implicit init kind!");
 
   QualType FieldBaseElementType =
-    SemaRef.Context.getBaseElementType(Field->getType());
+    SemaRef.Context.getBaseElementType(Field->getType().stripHyperobject());
 
   if (FieldBaseElementType->isRecordType()) {
     InitializedEntity InitEntity =
@@ -5716,7 +5716,7 @@ Sema::MarkBaseAndMemberDestructorsReferenced(SourceLocation Location,
 
     QualType FieldType = Context.getBaseElementType(Field->getType());
 
-    const RecordType* RT = FieldType->getAs<RecordType>();
+    const RecordType* RT = FieldType.stripHyperobject()->getAs<RecordType>();
     if (!RT)
       continue;
 
@@ -9497,6 +9497,12 @@ bool SpecialMemberDeletionInfo::shouldDeleteForField(FieldDecl *FD) {
           << !!ICI << MD->getParent() << FD << FieldType << /*Reference*/0;
       return true;
     }
+    if (FieldType->isHyperobjectType() && !FD->hasInClassInitializer()) {
+      if (Diagnose)
+        S.Diag(FD->getLocation(), diag::note_deleted_default_ctor_uninit_field)
+          << !!ICI << MD->getParent() << FD << FieldType << /*Reducer*/2;
+      return true;
+    }
     // C++11 [class.ctor]p5 (modified by DR2394): any non-variant non-static
     // data member of const-qualified type (or array thereof) with no
     // brace-or-equal-initializer is not const-default-constructible.
@@ -11101,6 +11107,7 @@ void Sema::CheckConversionDeclarator(Declarator &D, QualType &R,
       case DeclaratorChunk::Reference:
       case DeclaratorChunk::MemberPointer:
       case DeclaratorChunk::Pipe:
+      case DeclaratorChunk::Hyperobject:
         extendLeft(Before, Chunk.getSourceRange());
         break;
 
@@ -15030,6 +15037,14 @@ void Sema::DefineImplicitCopyAssignment(SourceLocation CurrentLocation,
       continue;
     }
 
+    if (Field->getType()->isHyperobjectType()) {
+      Diag(ClassDecl->getLocation(), diag::err_uninitialized_member_for_assign)
+        << Context.getTagDeclType(ClassDecl) << 2 << Field->getDeclName();
+      Diag(Field->getLocation(), diag::note_declared_at);
+      Invalid = true;
+      continue;
+    }
+
     // Suppress assigning zero-width bitfields.
     if (Field->isZeroLengthBitField(Context))
       continue;
@@ -15410,6 +15425,14 @@ void Sema::DefineImplicitMoveAssignment(SourceLocation CurrentLocation,
     if (!BaseType->getAs<RecordType>() && BaseType.isConstQualified()) {
       Diag(ClassDecl->getLocation(), diag::err_uninitialized_member_for_assign)
         << Context.getTagDeclType(ClassDecl) << 1 << Field->getDeclName();
+      Diag(Field->getLocation(), diag::note_declared_at);
+      Invalid = true;
+      continue;
+    }
+
+    if (Field->getType()->isHyperobjectType()) {
+      Diag(ClassDecl->getLocation(), diag::err_uninitialized_member_for_assign)
+        << Context.getTagDeclType(ClassDecl) << 2 << Field->getDeclName();
       Diag(Field->getLocation(), diag::note_declared_at);
       Invalid = true;
       continue;

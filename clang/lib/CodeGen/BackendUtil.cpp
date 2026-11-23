@@ -82,6 +82,7 @@
 #include "llvm/Transforms/Instrumentation/SanitizerCoverage.h"
 #include "llvm/Transforms/Instrumentation/ThreadSanitizer.h"
 #include "llvm/Transforms/Instrumentation/CilkSanitizer.h"
+#include "llvm/Transforms/Instrumentation/ComprehensiveStaticInstrumentation.h"
 #include "llvm/Transforms/ObjCARC.h"
 #include "llvm/Transforms/Scalar/EarlyCSE.h"
 #include "llvm/Transforms/Scalar/GVN.h"
@@ -1042,8 +1043,6 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
           });
     }
 
-// FIXME KITSUNE: Do we want to the Cilk sanitizer?
-#if 0
     // Register the Cilksan pass.
     if (LangOpts.Sanitize.has(SanitizerKind::Cilk))
       PB.registerTapirLateEPCallback(
@@ -1052,7 +1051,6 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
             MPM.addPass(CilkSanitizerPass());
             MPM.addPass(PB.buildPostCilkInstrumentationPipeline(Level));
           });
-#endif // 0
 
     if (CodeGenOpts.FatLTO) {
       MPM.addPass(PB.buildFatLTODefaultPipeline(

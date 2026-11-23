@@ -3559,6 +3559,13 @@ void CompilerInvocationBase::GenerateLangArgs(const LangOptions &Opts,
                                               ArgumentConsumer Consumer,
                                               const llvm::Triple &T,
                                               InputKind IK) {
+  if (Opts.getCilk() == LangOptions::Cilk_opencilk)
+    GenerateArg(Consumer, Opts.CilkOptions.has(CilkOpt_Kitsune)
+                              ? OPT_fopencilk_kitsune
+                              : OPT_fopencilk);
+  else if (Opts.getCilk() == LangOptions::Cilk_plus)
+    GenerateArg(Consumer, OPT_fcilkplus);
+
   if (Opts.KitsuneOpts.getKokkos())
     GenerateArg(Consumer, OPT_fkokkos);
   if (Opts.KitsuneOpts.getKokkosNoInit())
@@ -3854,6 +3861,18 @@ bool CompilerInvocation::ParseLangArgs(LangOptions &Opts, ArgList &Args,
                                        std::vector<std::string> &Includes,
                                        DiagnosticsEngine &Diags) {
   unsigned NumErrorsBefore = Diags.getNumErrors();
+
+  bool CilkKitsune = Args.hasArg(OPT_fopencilk_kitsune);
+  bool OpenCilk = Args.hasArg(OPT_fopencilk) || CilkKitsune;
+  bool CilkPlus = Args.hasArg(OPT_fcilkplus);
+  if (OpenCilk) {
+    if (CilkPlus)
+      Diags.Report(diag::err_drv_double_cilk);
+    Opts.setCilk(LangOptions::Cilk_opencilk);
+    Opts.CilkOptions.set(CilkOpt_Kitsune, CilkKitsune);
+  } else if (CilkPlus) {
+    Opts.setCilk(LangOptions::Cilk_plus);
+  }
 
   if (IK.getFormat() == InputKind::Precompiled ||
       IK.getLanguage() == Language::LLVM_IR ||
@@ -4483,6 +4502,10 @@ bool CompilerInvocation::ParseKitsuneArgs(KitsuneOptions &Opts, ArgList &Args,
                                           DiagnosticsEngine &Diags,
                                           const LangOptions &LangOpts) {
   unsigned NumErrorsBefore = Diags.getNumErrors();
+
+  if (LangOpts.ObjC && LangOpts.getCilk() != LangOptions::Cilk_none)
+    Diags.Report(diag::err_drv_cilk_objc);
+
   if (std::optional<llvm::TapirTargetID> TapirTarget = parseTapirTarget(Args)) {
     // Even if the tapir target is valid, it may not have been enabled when
     // building clang.
@@ -4519,7 +4542,7 @@ bool CompilerInvocation::ParseKitsuneArgs(KitsuneOptions &Opts, ArgList &Args,
       llvm_unreachable("ParseKitsuneArgs: Tapir target not handled");
     }
 
-    if (LangOpts.ObjC)
+    if (LangOpts.ObjC && LangOpts.getCilk() == LangOptions::Cilk_none)
       Diags.Report(diag::err_drv_kitsune_objc);
 
     Opts.setTapirTarget(*TapirTarget);

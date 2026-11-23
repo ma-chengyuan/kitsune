@@ -531,6 +531,8 @@ void LoopAttributes::clear() {
   CodeAlign = 0;
   MustProgress = false;
   SpawnStrategy = LoopAttributes::SEQ;
+  LoopTarget.reset();
+  DeferredSync = false;
 }
 
 LoopInfo::LoopInfo(BasicBlock *Header, const LoopAttributes &Attrs,
@@ -613,6 +615,11 @@ void LoopInfo::getTapirLoopProperties(
         MDString::get(Ctx, "tapir.loop.target"),
         ConstantAsMetadata::get(ConstantInt::get(llvm::Type::getInt32Ty(Ctx),
                                                  unsigned(*Attrs.LoopTarget)))};
+    LoopProperties.push_back(MDNode::get(Ctx, Vals));
+  }
+  if (Attrs.DeferredSync) {
+    Metadata *Vals[] = {MDString::get(Ctx, "tapir.loop.deferred_sync"),
+                        ConstantAsMetadata::get(ConstantInt::getTrue(Ctx))};
     LoopProperties.push_back(MDNode::get(Ctx, Vals));
   }
 }

@@ -1278,6 +1278,8 @@ CanThrowResult Sema::canThrow(const Stmt *S) {
   case Expr::ConvertVectorExprClass:
   case Expr::VAArgExprClass:
   case Expr::CXXParenListInitExprClass:
+  case Expr::CilkSpawnExprClass:
+  case Stmt::CilkForRangeStmtClass:
     return canSubStmtsThrow(*this, S);
 
   case Expr::CompoundLiteralExprClass:
@@ -1512,6 +1514,10 @@ CanThrowResult Sema::canThrow(const Stmt *S) {
   case Stmt::SEHTryStmtClass:
   case Stmt::SwitchStmtClass:
   case Stmt::WhileStmtClass:
+  case Stmt::CilkSpawnStmtClass:
+  case Stmt::CilkSyncStmtClass:
+  case Stmt::CilkForStmtClass:
+  case Stmt::CilkScopeStmtClass:
     return canSubStmtsThrow(*this, S);
 
   // Given their parallel nature we won't let forall and others throw...

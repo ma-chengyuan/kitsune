@@ -446,7 +446,7 @@ public:
   const InitializedEntity *getParent() const { return Parent; }
 
   /// Retrieve type being initialized.
-  QualType getType() const { return Type; }
+  QualType getType() const { return Type.stripHyperobject(); }
 
   /// Retrieve complete type-source information for the object being
   /// constructed, if known.
@@ -941,7 +941,10 @@ public:
 
     /// Initialize an aggreagate with parenthesized list of values.
     /// This is a C++20 feature.
-    SK_ParenthesizedListInit
+    SK_ParenthesizedListInit,
+
+    /// OpenCilk
+    SK_ViewLookup
   };
 
   /// A single step in the initialization sequence.
@@ -987,6 +990,10 @@ public:
 private:
   /// The kind of initialization sequence computed.
   enum SequenceKind SequenceKind;
+
+  /// Whether this initialization sequence is spawned.
+  bool IsSpawned = false;
+  SourceLocation SpawnLoc;
 
   /// Steps taken by this initialization.
   SmallVector<Step, 4> Steps;
@@ -1339,6 +1346,8 @@ public:
 
   /// Add a zero-initialization step.
   void AddZeroInitializationStep(QualType T);
+
+  void AddViewLookup(QualType T);
 
   /// Add a C assignment step.
   //

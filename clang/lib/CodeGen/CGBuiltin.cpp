@@ -241,6 +241,7 @@ static Value *MakeBinaryAtomicValue(
   llvm::Type *ValueType = Val->getType();
   Val = EmitToInt(CGF, Val, T, IntType);
 
+  MaybeDetach(&CGF, SpawnedScp);
   llvm::Value *Result =
       CGF.Builder.CreateAtomicRMW(Kind, DestAddr, Val, Ordering);
   return EmitFromInt(CGF, Result, T, ValueType);
@@ -250,6 +251,7 @@ static Value *EmitNontemporalStore(CodeGenFunction &CGF, const CallExpr *E) {
   CodeGenFunction::IsSpawnedScope SpawnedScp(&CGF);
   Value *Val = CGF.EmitScalarExpr(E->getArg(0));
   Address Addr = CGF.EmitPointerWithAlignment(E->getArg(1));
+  MaybeDetach(&CGF, SpawnedScp);
 
   Val = CGF.EmitToMemory(Val, E->getArg(0)->getType());
   LValue LV = CGF.MakeAddrLValue(Addr, E->getArg(0)->getType());
@@ -259,7 +261,9 @@ static Value *EmitNontemporalStore(CodeGenFunction &CGF, const CallExpr *E) {
 }
 
 static Value *EmitNontemporalLoad(CodeGenFunction &CGF, const CallExpr *E) {
+  CodeGenFunction::IsSpawnedScope SpawnedScp(&CGF);
   Address Addr = CGF.EmitPointerWithAlignment(E->getArg(0));
+  MaybeDetach(&CGF, SpawnedScp);
 
   LValue LV = CGF.MakeAddrLValue(Addr, E->getType());
   LV.setNontemporal(true);
@@ -335,6 +339,7 @@ static Value *MakeAtomicCmpXchgValue(CodeGenFunction &CGF, const CallExpr *E,
   llvm::Type *ValueType = Cmp->getType();
   Cmp = EmitToInt(CGF, Cmp, T, IntType);
   Value *New = EmitToInt(CGF, CGF.EmitScalarExpr(E->getArg(2)), T, IntType);
+  MaybeDetach(&CGF, SpawnedScp);
 
   Value *Pair = CGF.Builder.CreateAtomicCmpXchg(
       DestAddr, Cmp, New, llvm::AtomicOrdering::SequentiallyConsistent,
@@ -3154,8 +3159,10 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
                    BuiltinID != Builtin::BI__builtin_va_end);
     return RValue::get(nullptr);
   case Builtin::BI__builtin_va_copy: {
+    IsSpawnedScope SpawnedScp(this);
     Value *DstPtr = EmitVAListRef(E->getArg(0)).emitRawPointer(*this);
     Value *SrcPtr = EmitVAListRef(E->getArg(1)).emitRawPointer(*this);
+    MaybeDetach(this, SpawnedScp);
     Builder.CreateCall(CGM.getIntrinsic(Intrinsic::vacopy, {DstPtr->getType()}),
                        {DstPtr, SrcPtr});
     return RValue::get(nullptr);
@@ -3169,6 +3176,8 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
     bool SanitizeOverflow = SanOpts.has(SanitizerKind::SignedIntegerOverflow);
 
     Value *Result;
+    IsSpawnedScope SpawnedScp(this);
+    MaybeDetach(this, SpawnedScp);
     switch (getLangOpts().getSignedOverflowBehavior()) {
     case LangOptions::SOB_Defined:
       Result = EmitAbs(*this, EmitScalarExpr(E->getArg(0)), false);
@@ -3664,8 +3673,6 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
     return RValue::get(nullptr);
   }
   case Builtin::BI__builtin_verbose_trap: {
-    IsSpawnedScope SpawnedScp(this);
-    MaybeDetach(this, SpawnedScp);
     llvm::DILocation *TrapLocation = Builder.getCurrentDebugLocation();
     if (getDebugInfo()) {
       TrapLocation = getDebugInfo()->CreateTrapFailureMessageFor(
@@ -3673,6 +3680,8 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
           *E->getArg(1)->tryEvaluateString(getContext()));
     }
     ApplyDebugLocation ApplyTrapDI(*this, TrapLocation);
+    IsSpawnedScope SpawnedScp(this);
+    MaybeDetach(this, SpawnedScp);
     // Currently no attempt is made to prevent traps from being merged.
     EmitTrapCall(Intrinsic::trap);
     return RValue::get(nullptr);
@@ -4300,6 +4309,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
     Value *SizeVal = EmitScalarExpr(E->getArg(2));
     EmitArgCheck(TCK_Store, Dest, E->getArg(0), 0);
     EmitArgCheck(TCK_Load, Src, E->getArg(1), 1);
+    MaybeDetach(this, SpawnedScp);
     Builder.CreateMemCpy(Dest, Src, SizeVal, false);
     if (BuiltinID == Builtin::BImempcpy ||
         BuiltinID == Builtin::BI__builtin_mempcpy)
@@ -4381,6 +4391,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
     Value *SizeVal = EmitScalarExpr(E->getArg(2));
     EmitArgCheck(TCK_Store, Dest, E->getArg(0), 0);
     EmitArgCheck(TCK_Load, Src, E->getArg(1), 1);
+    MaybeDetach(this, SpawnedScp);
     Builder.CreateMemMove(Dest, Src, SizeVal, false);
     return RValue::get(Dest, *this);
   }
@@ -4837,11 +4848,13 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
   case Builtin::BI__sync_lock_release_4:
   case Builtin::BI__sync_lock_release_8:
   case Builtin::BI__sync_lock_release_16: {
+    IsSpawnedScope SpawnedScp(this);
     Address Ptr = CheckAtomicAlignment(*this, E);
     QualType ElTy = E->getArg(0)->getType()->getPointeeType();
 
     llvm::Type *ITy = llvm::IntegerType::get(getLLVMContext(),
                                              getContext().getTypeSize(ElTy));
+    MaybeDetach(this, SpawnedScp);
     llvm::StoreInst *Store =
         Builder.CreateStore(llvm::Constant::getNullValue(ITy), Ptr);
     Store->setAtomic(llvm::AtomicOrdering::Release);
@@ -6243,6 +6256,16 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
         cast<DeclRefExpr>(E->getArg(0)->IgnoreImpCasts())->getDecl());
     auto Str = CGM.GetAddrOfConstantCString(Name, "");
     return RValue::get(Str.getPointer());
+  }
+  case Builtin::BI__hyper_lookup: {
+    llvm::Value *Size = EmitScalarExpr(E->getArg(1));
+    Function *F = CGM.getIntrinsic(Intrinsic::hyper_lookup, Size->getType());
+    llvm::Value *Ptr = EmitScalarExpr(E->getArg(0));
+    llvm::Value *Identity = EmitScalarExpr(E->getArg(2));
+    llvm::Value *Reduce = EmitScalarExpr(E->getArg(3));
+    return RValue::get(Builder.CreateCall(
+        F, {Ptr, Size, Builder.CreateBitCast(Identity, VoidPtrTy),
+            Builder.CreateBitCast(Reduce, VoidPtrTy)}));
   }
   }
   IsSpawnedScope SpawnedScp(this);

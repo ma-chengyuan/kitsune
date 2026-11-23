@@ -227,6 +227,14 @@ def SpawnStmt : StmtNode<Stmt>;
 def ForallStmt : StmtNode<Stmt>;
 def CXXForallRangeStmt : StmtNode<Stmt>;
 
+// Cilk Plus Extensions.
+def CilkSyncStmt : StmtNode<Stmt>;
+def CilkSpawnStmt : StmtNode<Stmt>;
+def CilkSpawnExpr : StmtNode<Expr>;
+def CilkForStmt : StmtNode<Stmt>;
+def CilkScopeStmt : StmtNode<Stmt>;
+def CilkForRangeStmt: StmtNode<Stmt>;
+
 // OpenMP Directives.
 def OMPCanonicalLoop : StmtNode<Stmt>;
 def OMPExecutableDirective : StmtNode<Stmt, 1>;

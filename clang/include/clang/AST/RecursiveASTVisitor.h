@@ -25,6 +25,7 @@
 #include "clang/AST/DeclarationName.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/ExprCilk.h"
 #include "clang/AST/ExprConcepts.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
@@ -33,6 +34,7 @@
 #include "clang/AST/OpenACCClause.h"
 #include "clang/AST/OpenMPClause.h"
 #include "clang/AST/Stmt.h"
+#include "clang/AST/StmtCilk.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/AST/StmtOpenACC.h"
@@ -989,6 +991,14 @@ DEF_TRAVERSE_TYPE(BuiltinType, {})
 
 DEF_TRAVERSE_TYPE(ComplexType, { TRY_TO(TraverseType(T->getElementType())); })
 
+DEF_TRAVERSE_TYPE(HyperobjectType, {
+    TRY_TO(TraverseType(T->getElementType()));
+    if (Stmt *I = T->getIdentity())
+      TRY_TO(TraverseStmt(I));
+    if (Stmt *R = T->getReduce())
+      TRY_TO(TraverseStmt(R));
+  })
+
 DEF_TRAVERSE_TYPE(PointerType, { TRY_TO(TraverseType(T->getPointeeType())); })
 
 DEF_TRAVERSE_TYPE(BlockPointerType,
@@ -1246,6 +1256,15 @@ DEF_TRAVERSE_TYPELOC(BuiltinType, {})
 // FIXME: ComplexTypeLoc is unfinished
 DEF_TRAVERSE_TYPELOC(ComplexType, {
   TRY_TO(TraverseType(TL.getTypePtr()->getElementType()));
+})
+
+DEF_TRAVERSE_TYPELOC(HyperobjectType, {
+  const HyperobjectType *H = TL.getTypePtr();
+  TRY_TO(TraverseType(H->getElementType()));
+  if (Stmt *I = H->getIdentity())
+    TRY_TO(TraverseStmt(I));
+  if (Stmt *R = H->getReduce())
+    TRY_TO(TraverseStmt(R));
 })
 
 DEF_TRAVERSE_TYPELOC(PointerType,
@@ -2314,7 +2333,8 @@ bool RecursiveASTVisitor<Derived>::TraverseVarHelper(VarDecl *D) {
   TRY_TO(TraverseDeclaratorHelper(D));
   // Default params are taken care of when we traverse the ParmVarDecl.
   if (!isa<ParmVarDecl>(D) &&
-      (!D->isCXXForRangeDecl() || getDerived().shouldVisitImplicitCode()))
+      ((!D->isCXXForRangeDecl() && !D->isSimpleCilkForLVDecl()) ||
+       getDerived().shouldVisitImplicitCode()))
     TRY_TO(TraverseStmt(D->getInit()));
   return true;
 }
@@ -2919,6 +2939,29 @@ DEF_TRAVERSE_STMT(CXXForallRangeStmt, {
     TRY_TO_TRAVERSE_OR_ENQUEUE_STMT(S->getRangeInit());
     TRY_TO_TRAVERSE_OR_ENQUEUE_STMT(S->getBody());
     // Visit everything else only if shouldVisitImplicitCode().
+    ShouldVisitChildren = false;
+  }
+})
+
+DEF_TRAVERSE_STMT(CilkSpawnStmt, {})
+DEF_TRAVERSE_STMT(CilkSpawnExpr, {})
+DEF_TRAVERSE_STMT(CilkSyncStmt, {})
+DEF_TRAVERSE_STMT(CilkForStmt, {
+  if (!getDerived().shouldVisitImplicitCode() && S->getLoopVarStmt()) {
+    TRY_TO_TRAVERSE_OR_ENQUEUE_STMT(S->getLoopVarStmt());
+    TRY_TO_TRAVERSE_OR_ENQUEUE_STMT(S->getOriginalInit());
+    TRY_TO_TRAVERSE_OR_ENQUEUE_STMT(S->getOriginalCond());
+    TRY_TO_TRAVERSE_OR_ENQUEUE_STMT(S->getOriginalInc());
+    TRY_TO_TRAVERSE_OR_ENQUEUE_STMT(S->getBody());
+    // Visit everything else only if shouldVisitImplicitCode() or
+    // if this loop doesn't have a custom loop-variable statement.
+    ShouldVisitChildren = false;
+  }
+})
+DEF_TRAVERSE_STMT(CilkScopeStmt, {})
+DEF_TRAVERSE_STMT(CilkForRangeStmt, {
+  if (!getDerived().shouldVisitImplicitCode()) {
+    TRY_TO_TRAVERSE_OR_ENQUEUE_STMT(S->getCXXForRangeStmt());
     ShouldVisitChildren = false;
   }
 })

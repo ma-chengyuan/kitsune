@@ -3336,6 +3336,15 @@ def ftapir_nvarch_EQ : Joined<["-"], "ftapir-nvarch=">, Group<f_Group>,
 def fstripmine : Flag<["-"], "fstripmine">, Group<f_Group>,
   HelpText<"Enable the Tapir loop stripmining passes">;
 def fno_stripmine : Flag<["-"], "fno-stripmine">, Group<f_Group>;
+def fcilkplus : Flag<["-"], "fcilkplus">, Group<f_Group>,
+  Visibility<[ClangOption, CC1Option]>,
+  HelpText<"Enable Cilk Plus extensions">;
+def fopencilk : Flag<["-"], "fopencilk">, Group<f_Group>,
+  Visibility<[ClangOption, CC1Option]>,
+  HelpText<"Enable OpenCilk extensions">;
+def fopencilk_kitsune : Flag<["-"], "fopencilk-kitsune">, Group<f_Group>,
+  Visibility<[ClangOption, CC1Option]>,
+  HelpText<"Enable OpenCilk IR emission for the Kitsune handoff">;
 def opencilk_abi_bitcode_EQ : Joined<["--"], "opencilk-abi-bitcode=">,
   Visibility<[CC1Option]>, HelpText<"Path to OpenCilk ABI bitcode file">,
   MarshallingInfoString<CodeGenOpts<"OpenCilkABIBitcodeFile">>;

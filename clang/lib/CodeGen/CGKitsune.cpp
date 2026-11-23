@@ -84,11 +84,12 @@ CodeGenFunction::GetTapirStrategyAttr(ArrayRef<const Attr *> Attrs) {
   return Strategy;
 }
 
-// If a tapir target attribute exists, it will override the tapir target
-// specified on the command line - if any. If a tapir target attribute does not
-// exist and one was specified on the command line, that will be returned.
+// A target attribute overrides the command-line target. The OpenCilk handoff
+// keeps the CPU target on unannotated Cilk loops so the lowering pass can
+// distinguish them from explicit CUDA loops.
 std::optional<llvm::TapirTargetID>
-CodeGenFunction::GetTapirTargetAttr(ArrayRef<const Attr *> Attrs) {
+CodeGenFunction::GetTapirTargetAttr(ArrayRef<const Attr *> Attrs,
+                                    bool IsCilkLoop) {
   // FIXME KITSUNE: This will check for the first occurrence of the tapir target
   // attribute and break immediately if it finds it. Is this what we actually
   // want?
@@ -119,7 +120,10 @@ CodeGenFunction::GetTapirTargetAttr(ArrayRef<const Attr *> Attrs) {
       llvm_unreachable("Tapir target not handled");
     }
   }
-  return CGM.getLangOpts().KitsuneOpts.getTapirTarget();
+  auto Target = CGM.getLangOpts().KitsuneOpts.getTapirTarget();
+  if (IsCilkLoop && (!Target || *Target == llvm::TapirTargetID::None))
+    return llvm::TapirTargetID::OpenCilk;
+  return Target;
 }
 
 llvm::Value *
