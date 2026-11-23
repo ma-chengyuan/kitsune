@@ -28,6 +28,7 @@ available alongside the OpenCilk constructs.
 On x86-64 Linux the build needs CMake, Ninja, a host Clang and CUDA. Run from the Kitsune checkout root.
 
 ```sh
+unset OPENCILK_SOURCE OPENCILK_PATH
 export CUDA_HOME=/usr/local/cuda-12.9
 export KITSUNE_PATH="$PWD/build/kitsune"
 cilk-kitsune/build-artifact.sh
