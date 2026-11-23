@@ -59,9 +59,11 @@
 /// ##########################################################################
 
 /// Check -march=pwr7 is NOT passed to nvptx64-nvidia-cuda.
-// RUN:    not %clang -### -no-canonical-prefixes -fopenmp=libomp -fopenmp-targets=nvptx64-nvidia-cuda --target=powerpc64le-ibm-linux-gnu -march=pwr7 %s 2>&1 \
+// RUN:    not %clang -### -no-canonical-prefixes -fopenmp=libomp -fopenmp-targets=nvptx64-nvidia-cuda --target=powerpc64le-ibm-linux-gnu -march=pwr7 \
+// RUN:    --nvptx-arch-tool=%t.missing-nvptx-arch %s 2>&1 \
 // RUN:    | FileCheck -check-prefix=CHK-FOPENMP-MARCH-TO-GPU %s
 
+// CHK-FOPENMP-MARCH-TO-GPU: error: cannot determine nvptx64 architecture:
 // CHK-FOPENMP-MARCH-TO-GPU-NOT: clang{{.*}} "-target-cpu" "pwr7" {{.*}}"-fopenmp-is-target-device"
 
 /// ###########################################################################

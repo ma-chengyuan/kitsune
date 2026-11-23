@@ -734,6 +734,9 @@ NVPTXToolChain::TranslateArgs(const llvm::opt::DerivedArgList &Args,
     if (!GPUsOrErr) {
       getDriver().Diag(diag::err_drv_undetermined_gpu_arch)
           << getArchName() << llvm::toString(GPUsOrErr.takeError()) << "-march";
+      // The assembler job still needs a concrete architecture.
+      DAL->AddJoinedArg(nullptr, Opts.getOption(options::OPT_march_EQ),
+                        OffloadArchToString(OffloadArch::CudaDefault));
     } else {
       if (GPUsOrErr->size() > 1)
         getDriver().Diag(diag::warn_drv_multi_gpu_arch)
@@ -786,7 +789,7 @@ void NVPTXToolChain::adjustDebugInfoKind(
 
 Expected<SmallVector<std::string>>
 NVPTXToolChain::getSystemGPUArchs(const ArgList &Args) const {
-  // Detect NVIDIA GPUs availible on the system.
+  // Detect NVIDIA GPUs available on the system.
   std::string Program;
   if (Arg *A = Args.getLastArg(options::OPT_nvptx_arch_tool_EQ))
     Program = A->getValue();
@@ -798,9 +801,14 @@ NVPTXToolChain::getSystemGPUArchs(const ArgList &Args) const {
     return StdoutOrErr.takeError();
 
   SmallVector<std::string, 1> GPUArchs;
-  for (StringRef Arch : llvm::split((*StdoutOrErr)->getBuffer(), "\n"))
-    if (!Arch.empty())
-      GPUArchs.push_back(Arch.str());
+  for (StringRef Arch : llvm::split((*StdoutOrErr)->getBuffer(), "\n")) {
+    if (Arch.empty())
+      continue;
+    if (!IsNVIDIAOffloadArch(StringToOffloadArch(Arch)))
+      return llvm::createStringError("unsupported CUDA GPU architecture '" +
+                                     Arch + "' reported by nvptx-arch");
+    GPUArchs.push_back(Arch.str());
+  }
 
   if (GPUArchs.empty())
     return llvm::createStringError(std::error_code(),

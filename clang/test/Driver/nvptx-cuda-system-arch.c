@@ -5,10 +5,12 @@
 // RUN: cp %S/Inputs/nvptx-arch/nvptx_arch_fail %t/
 // RUN: cp %S/Inputs/nvptx-arch/nvptx_arch_sm_70 %t/
 // RUN: cp %S/Inputs/nvptx-arch/nvptx_arch_sm_89_sm_80 %t/
+// RUN: cp %S/Inputs/nvptx-arch/nvptx_arch_unsupported %t/
 // RUN: echo '#!/bin/sh' > %t/nvptx_arch_empty
 // RUN: chmod +x %t/nvptx_arch_fail
 // RUN: chmod +x %t/nvptx_arch_sm_70
 // RUN: chmod +x %t/nvptx_arch_sm_89_sm_80
+// RUN: chmod +x %t/nvptx_arch_unsupported
 // RUN: chmod +x %t/nvptx_arch_empty
 
 // case when nvptx-arch returns nothing or fails
@@ -42,3 +44,7 @@
 // RUN:     --cuda-path=%S/Inputs/CUDA_102/usr/local/cuda %s 2>&1 | FileCheck %s --check-prefix=MARCH-sm_89
 // MARCH-sm_89: warning: multiple nvptx64 architectures are detected: sm_89, sm_80; only the first one is used for '-march' [-Wmulti-gpu]
 // MARCH-sm_89: "-cc1" "-triple" "nvptx64-nvidia-cuda"{{.*}}"-target-cpu" "sm_89"
+
+// RUN:   not %clang -### --target=nvptx64-nvidia-cuda -nogpulib -march=native \
+// RUN:     --nvptx-arch-tool=%t/nvptx_arch_unsupported %s 2>&1 | FileCheck %s --check-prefix=MARCH-UNSUPPORTED
+// MARCH-UNSUPPORTED: error: cannot determine nvptx64 architecture: unsupported CUDA GPU architecture 'sm_999' reported by nvptx-arch

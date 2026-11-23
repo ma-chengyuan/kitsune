@@ -6,6 +6,7 @@
 // RUN: cp %S/Inputs/amdgpu-arch/amdgpu_arch_gfx906 %t/
 // RUN: cp %S/Inputs/nvptx-arch/nvptx_arch_fail %t/
 // RUN: cp %S/Inputs/nvptx-arch/nvptx_arch_sm_70 %t/
+// RUN: cp %S/Inputs/nvptx-arch/nvptx_arch_unsupported %t/
 // RUN: echo '#!/bin/sh' > %t/amdgpu_arch_empty
 // RUN: chmod +x %t/amdgpu_arch_fail
 // RUN: chmod +x %t/amdgpu_arch_gfx906
@@ -13,6 +14,7 @@
 // RUN: echo '#!/bin/sh' > %t/nvptx_arch_empty
 // RUN: chmod +x %t/nvptx_arch_fail
 // RUN: chmod +x %t/nvptx_arch_sm_70
+// RUN: chmod +x %t/nvptx_arch_unsupported
 // RUN: chmod +x %t/nvptx_arch_empty
 
 // case when nvptx-arch and amdgpu-arch return nothing or fails
@@ -69,6 +71,11 @@
 // RUN:     -fopenmp-targets=nvptx64-nvidia-cuda --nvptx-arch-tool=%t/nvptx_arch_empty %s 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=NVPTX
 // NVPTX: error: cannot determine nvptx64 architecture: No NVIDIA GPU detected in the system; consider passing it via '-march'
+
+// RUN:   not %clang -### --target=x86_64-unknown-linux-gnu -nogpulib -fopenmp=libomp \
+// RUN:     -fopenmp-targets=nvptx64-nvidia-cuda --nvptx-arch-tool=%t/nvptx_arch_unsupported %s 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=NVPTX-UNSUPPORTED
+// NVPTX-UNSUPPORTED: error: cannot determine nvptx64 architecture: unsupported CUDA GPU architecture 'sm_999' reported by nvptx-arch
 
 // case when 'amdgpu-arch' returns nothing using `-fopenmp-targets=`.
 // RUN:   not %clang -### --target=x86_64-unknown-linux-gnu -nogpulib -fopenmp=libomp \
