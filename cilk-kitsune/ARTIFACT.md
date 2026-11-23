@@ -103,3 +103,5 @@ directory with e.g. `--sizes 18 19`. Use `--reference-library-path` and
 `--candidate-library-path` to override each executable's library search
 path for the comparison. Check the recorded library paths before attributing a
 timing difference to the compiler.
+
+The hardware smokes require a named CUDA kernel launch in each GPU program’s runtime log. The Shockwave timing harness verifies a separate untimed proof with launch tracing for each binary before its warmups and timed pairs.

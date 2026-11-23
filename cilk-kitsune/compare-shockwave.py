@@ -12,17 +12,21 @@ import statistics
 import subprocess
 
 
-def observe(binary, env, log, size):
+def observe(binary, env, log, size, *, check_dispatch=False):
     env = env | {"SPARTAN_N": str(size)}
+    env = env | {"KITRT_VERBOSE": "1" if check_dispatch else "0"}
     with log.open("x") as stream:
         subprocess.run(["taskset", "-c", "0-7", str(binary), "test", "Spartan proof"],
                        stdout=stream, stderr=subprocess.STDOUT, env=env, check=True,
                        cwd=binary.parent, timeout=180)
     output = log.read_text()
     proof = re.search(r"spartan_prove \(([\d.]+)s", output)
-    if not (proof and "spartan_verify (" in output and "1 | 1 passed" in output
-            and "kitcuda:" in output):
-        raise RuntimeError(f"Missing proof, verification or CUDA output in {log}")
+    if not (proof and "spartan_verify (" in output and "1 | 1 passed" in output):
+        raise RuntimeError(f"Missing proof or verification in {log}")
+    if check_dispatch and not re.search(
+            r"^kitcuda: (?:nested )?kernel '_cuabi_kern_[^']+' launch parameters:$",
+            output, re.MULTILINE):
+        raise RuntimeError(f"No CUDA kernel launch observed in {log}")
     return float(proof[1])
 
 
@@ -60,6 +64,10 @@ def main():
                            "runtime_sha256": hashlib.sha256(Path(runtime[1]).read_bytes()).hexdigest(),
                            "ldd": libraries}
     (args.output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+
+    for label, binary in builds.items():
+        observe(binary, environments[label], args.output / f"dispatch-{label}.log",
+                min(args.sizes), check_dispatch=True)
 
     for rep in range(1, 4):
         for label, binary in builds.items():

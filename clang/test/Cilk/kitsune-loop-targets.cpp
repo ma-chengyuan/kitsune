@@ -10,8 +10,9 @@ extern "C" void update(int *a, int n) {
 }
 
 // CHECK-LABEL: define {{.*}}void @update(
-// CHECK: detach within
+// CHECK: detach within [[CPU_REGION:%[-a-zA-Z$._0-9]+]],
 // CHECK: br i1 {{.*}}, !llvm.loop [[CPU:![0-9]+]]
+// CHECK: sync within [[CPU_REGION]],
 // CHECK: detach within
 // CHECK: br i1 {{.*}}, !llvm.loop [[GPU:![0-9]+]]
 // CHECK: [[CPU]] = distinct !{[[CPU]], [[PROGRESS:![0-9]+]], [[SPAWN:![0-9]+]], [[OPENCILK:![0-9]+]]}

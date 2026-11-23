@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
     int N = strtol(argv[1], NULL, 10);
     size_t cilk_reducer(id_sum, merge_sum) sum = 0;
     cilk_for (size_t j = 0; j < N; j++) {
-        [[tapir::target("cuda")]] cilk_for (size_t i = 0; i < N; i++) {
+        [[tapir::target("cuda"), tapir::grain_size(1)]] cilk_for (size_t i = 0; i < N; i++) {
             sum += i | j;
         }
     }

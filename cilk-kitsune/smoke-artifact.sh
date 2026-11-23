@@ -35,6 +35,18 @@ for level in 0 2; do
   "./cpu-cilk-O$level"
 done
 
+# Check the executed GPU branch as well as its numerical result. A kitrt
+# shutdown message is also printed by programs which used only a serial tail.
+run_gpu_smoke() {
+  local log=$1
+  shift
+  KITRT_VERBOSE=1 "$@" >"$log" 2>&1 || { cat "$log" >&2; return 1; }
+  if ! grep -Eq "^kitcuda: (nested )?kernel '_cuabi_kern_[^']+' launch parameters:$" "$log"; then
+    echo "No CUDA kernel launch observed in $log" >&2
+    return 1
+  fi
+}
+
 for mode in fused unfused naive; do
   flags=()
   case "$mode" in
@@ -44,24 +56,24 @@ for mode in fused unfused naive; do
   "$here/ock++" -O2 -std=c++17 -fopencilk -DZERA_SMOKE_CUDA "--cuabi-arch=$arch" \
     "-save-temps=$out/$mode" "${flags[@]}" "$here/test_reducer_smoke.cpp" -o "$mode-reducer"
   grep -Eq 'call .*@__kitcuda_launch_kernel\(' "$mode/test_reducer_smoke.kitsune.ll"
-  "./$mode-reducer"
+  run_gpu_smoke "$mode.log" "./$mode-reducer"
 done
 
 "$here/ock++" -O2 -std=c++17 -fopencilk "--cuabi-arch=$arch" \
   "-save-temps=$out/nested-ir" "$here/test_parsum_2d.cpp" -o nested
 grep -Eq 'call .*@__kitcuda_launch_kernel\(' nested-ir/test_parsum_2d.kitsune.ll
-./nested 17 | tee nested.log
+run_gpu_smoke nested.log ./nested 17
 grep -Fq 'Sum of first 17 numbers: 3648 vs 3648' nested.log
 
 "$here/ock++" -g -O2 -std=c++17 "--cuabi-arch=$arch" \
   "-save-temps=$out/transpose-ir" "$here/test_transpose_smoke.cpp" -o transpose
 grep -Eq 'call .*@__kitcuda_launch_kernel\(' transpose-ir/test_transpose_smoke.kitsune.ll
-./transpose
+run_gpu_smoke transpose.log ./transpose
 
 "$here/ock++" -O2 -std=c++20 -fopencilk "--cuabi-arch=$arch" \
   "-save-temps=$out/scan-ir" "$here/scan.cpp" -o scan
 grep -Eq 'call .*@__kitcuda_launch_kernel\(' scan-ir/scan.kitsune.ll
-./scan 4097
+run_gpu_smoke scan.log ./scan 4097
 
 resource=$("$KITSUNE_PATH/bin/clang++" -print-resource-dir)/lib
 cilklib="$resource/x86_64-unknown-linux-gnu"
@@ -79,7 +91,7 @@ if [[ -n ${ZERA_BENCHMARKS:-} || -n ${ICICLE_INCLUDE:-} ]]; then
     -I"$ZERA_BENCHMARKS/include" -I"$ICICLE_INCLUDE" "$ZERA_BENCHMARKS/ntt/zera_ntt_batched.cpp" \
     -o tiled-ntt -L"$cilklib" "-Wl,-rpath,$cilklib" -lopencilk -lopencilk-personality-cpp
   for log_n in 12 21; do
-    ./tiled-ntt "$log_n" 2 1 2>&1 | tee "ntt-$log_n.log"
+    run_gpu_smoke "ntt-$log_n.log" ./tiled-ntt "$log_n" 2 1
     grep -Fq '[batched] OK (2 transforms)' "ntt-$log_n.log"
   done
 fi
