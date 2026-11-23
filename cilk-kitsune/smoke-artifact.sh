@@ -18,15 +18,30 @@ out=$(mktemp -d "$build/smoke/run.XXXXXX")
 echo "Smoke test outputs in $out"
 cd "$out"
 
-# Exercise both a source-plus-object link and an object-only link.
+# Exercise final links with a source and an object, then with only objects.
+# Neither input uses Cilk, and eager binding checks the runtime's dependencies.
 echo 'int answer() { return 42; }' > answer.cpp
 echo 'int answer(); int main() { return answer() == 42 ? 0 : 1; }' > main.cpp
 "${mixed[@]}" -O2 -std=c++17 -c answer.cpp -o answer.o
-"${mixed[@]}" -O2 -std=c++17 main.cpp answer.o -o linked
-./linked
 "${mixed[@]}" -O2 -std=c++17 -c main.cpp -o main.o
-"${mixed[@]}" main.o answer.o -o linked-objects
-./linked-objects
+linkers=(default)
+for linker in bfd lld; do
+  linker_path=$("$clangxx" "-print-prog-name=ld.$linker")
+  if command -v "$linker_path" >/dev/null; then
+    linkers+=("$linker")
+  fi
+done
+for linker in "${linkers[@]}"; do
+  link_flags=(-Wl,--as-needed)
+  if [[ $linker != default ]]; then
+    link_flags+=("-fuse-ld=$linker")
+  fi
+  for input in main.cpp main.o; do
+    name="as-needed-$linker-${input##*.}"
+    "${mixed[@]}" -O2 -std=c++17 "${link_flags[@]}" "$input" answer.o -o "$name"
+    LD_BIND_NOW=1 "./$name"
+  done
+done
 
 "$clangxx" -std=c++17 -O2 -fopencilk \
   "$here/test_reducer_smoke.cpp" -o cpu-reducer
@@ -40,11 +55,12 @@ done
 
 # Check the executed GPU branch as well as its numerical result. A kitrt
 # shutdown message is also printed by programs which used only a serial tail.
+gpu_launch_pattern="^kitcuda: (nested )?kernel '_cuabi_kern_[^']+' launch parameters:$"
 run_gpu_smoke() {
   local log=$1
   shift
   KITRT_VERBOSE=1 "$@" >"$log" 2>&1 || { cat "$log" >&2; return 1; }
-  if ! grep -Eq "^kitcuda: (nested )?kernel '_cuabi_kern_[^']+' launch parameters:$" "$log"; then
+  if ! grep -Eq "$gpu_launch_pattern" "$log"; then
     echo "No CUDA kernel launch observed in $log" >&2
     return 1
   fi
@@ -77,6 +93,27 @@ grep -Fq 'Sum of first 17 numbers: 3648 vs 3648' nested.log
 
 build_gpu_smoke transpose -g -std=c++17 "$here/test_transpose_smoke.cpp"
 run_gpu_smoke transpose.log ./transpose
+
+# Both translation units use the same CUDA kernel name. The debug build
+# derives the name from the source basename and line, so keep both aligned.
+for name in same-name same-name-debug; do
+  flags=(-O2 -std=c++17)
+  if [[ $name == same-name-debug ]]; then
+    flags+=(-g)
+  fi
+  for module in a b; do
+    "${mixed[@]}" "${flags[@]}" -c "$here/test_same_kernel_name/$module/update.cpp" \
+      -o "$name-$module.o"
+  done
+  "${mixed[@]}" "${flags[@]}" "$here/test_same_kernel_name/main.cpp" \
+    "$name-a.o" "$name-b.o" -o "$name"
+  run_gpu_smoke "$name.log" "./$name"
+  mapfile -t launches < <(grep -E "$gpu_launch_pattern" "$name.log")
+  if [[ ${#launches[@]} -ne 2 || ${launches[0]} != "${launches[1]}" ]]; then
+    echo "Expected two CUDA launches with the same kernel name in $name.log" >&2
+    exit 1
+  fi
+done
 
 build_gpu_smoke scan -std=c++20 "$here/scan.cpp"
 run_gpu_smoke scan.log ./scan 4097
