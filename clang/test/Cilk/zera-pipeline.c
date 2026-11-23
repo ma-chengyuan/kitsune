@@ -5,7 +5,7 @@
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fzera -O2 -debug-info-kind=standalone --opencilk-abi-bitcode=%S/Inputs/libopencilk-abi.bc -emit-llvm -o - %s | FileCheck %s --check-prefix=MIXED --implicit-check-not='detach within' --implicit-check-not='sync within'
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -fopencilk -O2 --opencilk-abi-bitcode=%S/Inputs/libopencilk-abi.bc -emit-llvm -o - %s | FileCheck %s --check-prefix=CPU --implicit-check-not=__kitcuda_memcpy
 // RUN: not %clang_cc1 -triple x86_64-unknown-linux-gnu -fzera -O0 -emit-llvm -o /dev/null %s 2>&1 | FileCheck %s --check-prefix=LEVEL
-// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -std=c2x -fzera -O2 -emit-llvm -o /dev/null -DBAD_TARGET -verify %s
+// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -x c++ -std=c++17 -fzera -O2 -emit-llvm -o /dev/null -DBAD_TARGET -verify %s
 
 // PIPE: loop-vectorize<interleave-forced-only;vectorize-forced-only;>
 // PIPE-NOT: slp-vectorizer
@@ -38,7 +38,7 @@ void copy(void *dst, const void *src, unsigned long n) {
 
 #ifdef BAD_TARGET
 void unsupported(int n) {
-  [[tapir::target("hip")]] // expected-error {{Tapir loop target 'hip' is unavailable with '-fzera'}}
+  [[tapir::target("hip")]] // expected-error {{unsupported Tapir loop target 'hip' with '-fzera'}}
   _Cilk_for (int i = 0; i < n; ++i)
     work(i);
 }

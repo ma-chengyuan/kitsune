@@ -15,7 +15,7 @@ def err_fe_error_reading : Error<"error reading '%0': %1">;
 def err_fe_error_reading_stdin : Error<"error reading stdin: %0">;
 def err_fe_error_backend : Error<"error in backend: %0">, DefaultFatal;
 def err_fe_zera_tapir_loop_target : Error<
-    "Tapir loop target '%0' is unavailable with '-fzera'">;
+    "unsupported Tapir loop target '%0' with '-fzera'">;
 
 def err_fe_inline_asm : Error<"%0">, CatInlineAsm;
 def warn_fe_inline_asm : Warning<"%0">, CatInlineAsm, InGroup<BackendInlineAsm>;
