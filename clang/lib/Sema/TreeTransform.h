@@ -1294,8 +1294,8 @@ public:
   QualType RebuildDependentBitIntType(bool IsUnsigned, Expr *NumBitsExpr,
                                       SourceLocation Loc);
 
-  QualType RebuildHyperobjectType(QualType ElementType, Expr *I,
-                                  Expr *R, SourceLocation Loc);
+  QualType RebuildHyperobjectType(QualType ElementType, Expr *&I, Expr *&R,
+                                  SourceLocation Loc);
 
   /// Build a new template name given a nested name specifier, a flag
   /// indicating whether the "template" keyword was provided, and the template
@@ -5406,16 +5406,17 @@ TreeTransform<Derived>::TransformHyperobjectType(TypeLocBuilder &TLB,
   if (ElementType.isNull())
     return QualType();
 
-  QualType Result =
-    getDerived().RebuildHyperobjectType(ElementType, NewI.get(),
-                                        NewR.get(), TL.getHyperLoc());
+  Expr *Identity = NewI.get();
+  Expr *Reduce = NewR.get();
+  QualType Result = getDerived().RebuildHyperobjectType(
+      ElementType, Identity, Reduce, TL.getHyperLoc());
   if (Result.isNull())
     return QualType();
 
   HyperobjectTypeLoc NewT = TLB.push<HyperobjectTypeLoc>(Result);
   NewT.setHyperLoc(TL.getHyperLoc());
-  NewT.setCallbackExprs(TL.getIdentityExpr() ? NewI.get() : nullptr,
-                        TL.getReduceExpr() ? NewR.get() : nullptr);
+  NewT.setCallbackExprs(TL.getIdentityExpr() ? Identity : nullptr,
+                        TL.getReduceExpr() ? Reduce : nullptr);
   return Result;
 }
 
@@ -16543,7 +16544,7 @@ QualType TreeTransform<Derived>::RebuildDependentBitIntType(
 
 template<typename Derived>
 QualType TreeTransform<Derived>::RebuildHyperobjectType(QualType ElementType,
-                                                        Expr *I, Expr *R,
+                                                        Expr *&I, Expr *&R,
                                                         SourceLocation Loc) {
   return SemaRef.BuildHyperobjectType(ElementType, I, R, Loc);
 }

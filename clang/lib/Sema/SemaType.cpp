@@ -1988,8 +1988,9 @@ QualType Sema::BuildReferenceType(QualType T, bool SpelledAsLValue,
 }
 
 // Return value is always non-null.
-Expr *Sema::ValidateReducerCallback(Expr *E, unsigned NumArgs,
+Expr *Sema::ValidateReducerCallback(Expr *&AsWritten, unsigned NumArgs,
                                     SourceLocation Loc) {
+  Expr *E = AsWritten;
   if (!E)
     E = new (Context) CXXNullPtrLiteralExpr(Context.NullPtrTy, Loc);
 
@@ -2043,6 +2044,11 @@ Expr *Sema::ValidateReducerCallback(Expr *E, unsigned NumArgs,
     bool Multiple = false;
     if (FunctionDecl *F = ResolveAddressOfOverloadedFunction(E, FnTy, true,
                                                              What, &Multiple)) {
+      // Keep the resolved reference and its spelling for this declaration's
+      // TypeLoc. The semantic type uses a normalized function reference.
+      if (ExprResult Resolved = FixOverloadedFunctionReference(E, What, F);
+          Resolved.isUsable())
+        AsWritten = Resolved.get();
       T = F->getType();
       E = BuildDeclRefExpr(F, T, VK_LValue, E->getExprLoc());
       T = Context.getPointerType(T);
@@ -2066,8 +2072,8 @@ Expr *Sema::ValidateReducerCallback(Expr *E, unsigned NumArgs,
                                   VK_PRValue, FPOptionsOverride());
 }
 
-QualType Sema::BuildHyperobjectType(QualType Element, Expr *Identity,
-                                    Expr *Reduce, SourceLocation Loc) {
+QualType Sema::BuildHyperobjectType(QualType Element, Expr *&Identity,
+                                    Expr *&Reduce, SourceLocation Loc) {
   // This function must return a HyperobjectType with the given
   // element type, otherwise the rest of the front end will get angry.
   // Template instantiation is quite strict about preserving structure.
@@ -2088,11 +2094,11 @@ QualType Sema::BuildHyperobjectType(QualType Element, Expr *Identity,
     Element.removeLocalVolatile();
   }
 
-  Identity = ValidateReducerCallback(Identity, 1, Loc);
-  Reduce = ValidateReducerCallback(Reduce, 2, Loc);
+  Expr *ValidatedIdentity = ValidateReducerCallback(Identity, 1, Loc);
+  Expr *ValidatedReduce = ValidateReducerCallback(Reduce, 2, Loc);
 
   // The result will be marked erroneous if Element is incomplete.
-  return Context.getHyperobjectType(Element, Identity, Reduce);
+  return Context.getHyperobjectType(Element, ValidatedIdentity, ValidatedReduce);
 }
 
 QualType Sema::BuildReadPipeType(QualType T, SourceLocation Loc) {
