@@ -201,12 +201,7 @@ if (KITSUNE_HIP_ENABLED)
   target_link_libraries(${KITRT} PUBLIC ${KITSUNE_HIP_LIB_AMDHIP64})
 endif()
 
-# ${KITRT_INSTALL_PREFIX} will be set to ${CMAKE_INSTALL_PREFIX} for the broader
-# LLVM project that is being built. On the other hand, ${CMAKE_INSTALL_PREFIX}
-# will be set to some directory within the build directory into which this is
-# "installed" at build time (this is because libkitrt is treated as an
-# "external project". There is probably a better way of handling all this).
-# This
+# Find LLVM's libraries relative to libkitrt in both prefix layouts.
 set_property(TARGET ${KITRT} APPEND PROPERTY
   INSTALL_RPATH "$ORIGIN/../../../")
 set_property(TARGET ${KITRT} APPEND PROPERTY

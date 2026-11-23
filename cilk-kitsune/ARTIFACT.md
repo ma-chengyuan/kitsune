@@ -37,7 +37,9 @@ cilk-kitsune/smoke-artifact.sh
 
 `BUILD_DIR` defaults to the checkout's `build/` directory and `KITSUNE_PATH` defaults to `$BUILD_DIR/kitsune`. The wrapper's frontend and backend both use this prefix. The optional `OPENCILK_PATH` override selects an external frontend for comparisons with the two-compiler reference. `CMAKE_BUILD_PARALLEL_LEVEL` controls build parallelism and `LLVM_USE_LINKER` selects the host linker. The first build fetches Kitsune's pinned Cheetah and runtime dependencies.
 
-The smoke script checks CPU and GPU reductions against a serial reference, confirms an actual CUDA launch in the lowered IR, and exercises a GPU loop inside a CPU Cilk loop. It writes intermediate IR, logs and executables under `$BUILD_DIR/smoke/`. GPU tests use `sm_80` with embedded PTX by default. Set `CUDA_ARCH` to override the target.
+Use `clang++ -fopencilk` for a native CPU Cilk executable and add `-static` for a static link. The legacy `-fcilkplus` spelling supports parsing and Tapir IR emission. For native code with that spelling, select a lowering target explicitly, such as `-ftapir=opencilk` or `-ftapir=serial`.
+
+The smoke script checks CPU and GPU reductions against a serial reference, checks CUDA lowering and execution, and exercises a GPU loop inside a CPU Cilk loop. It writes intermediate IR, logs and executables under `$BUILD_DIR/smoke/`. GPU tests use `sm_80` with embedded PTX by default. Set `CUDA_ARCH` to override the target.
 
 For the batched NTT, use the paper benchmark checkout at `224660e8e24d`. In a clean checkout of `ingonyama-zk/icicle-snark` at `bf00385db190`, apply `cilk-kitsune/icicle-snark-bf00385-headers.patch` from this repository. It preserves the three modified Icicle headers used in the evaluation environment. Then run
 

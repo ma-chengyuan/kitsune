@@ -46,7 +46,7 @@ configure_file(
 
 install(DIRECTORY
   ${CMAKE_BINARY_DIR}/include/
-  DESTINATION ${CMAKE_INSTALL_PREFIX}/include
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
 install(FILES kitsune.h

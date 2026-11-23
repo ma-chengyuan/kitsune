@@ -3338,7 +3338,7 @@ def fstripmine : Flag<["-"], "fstripmine">, Group<f_Group>,
 def fno_stripmine : Flag<["-"], "fno-stripmine">, Group<f_Group>;
 def fcilkplus : Flag<["-"], "fcilkplus">, Group<f_Group>,
   Visibility<[ClangOption, CC1Option]>,
-  HelpText<"Enable Cilk Plus extensions">;
+  HelpText<"Enable Cilk Plus syntax. Native compilation requires a -ftapir= lowering target">;
 def fopencilk : Flag<["-"], "fopencilk">, Group<f_Group>,
   Visibility<[ClangOption, CC1Option]>,
   HelpText<"Enable OpenCilk extensions">;

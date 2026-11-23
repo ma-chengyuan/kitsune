@@ -56,9 +56,6 @@ get_clang_resource_dir(CLANG_RESOURCE_SUBDIR)
 get_clang_resource_dir(CLANG_RESOURCE_INTDIR
   PREFIX ${CMAKE_BINARY_DIR})
 
-get_clang_resource_dir(CLANG_RESOURCE_INSTALL_DIR
-  PREFIX ${CMAKE_INSTALL_PREFIX})
-
 if (KITSUNE_KOKKOS_ENABLED)
   # We currently don't support using a pre-built Kokkos - even if it has been
   # patched the way we need it to be. This could possibly be moved to
@@ -140,7 +137,7 @@ if (KITSUNE_KOKKOS_ENABLED)
   # NOTE: The trailing slash after the directory to copy is required
   #
   install(DIRECTORY ${KITSUNE_KOKKOS_INSTALL_DIR}/
-    DESTINATION ${CLANG_RESOURCE_INSTALL_DIR}
+    DESTINATION ${CLANG_RESOURCE_SUBDIR}
     USE_SOURCE_PERMISSIONS)
 
   set(KITSUNE_KOKKOS_EXTRA_PREPROCESSOR_FLAGS
@@ -351,15 +348,10 @@ if (KITSUNE_OPENCILK_ENABLED)
   )
   add_dependencies(cheetah-copy-to-build-dir cheetah)
 
-  # Add a custom target to install opencilk to the final install directory with
-  # the rest of kitsune. The destination directory is set to ${CMAKE_BINARY_DIR}
-  # since it is the install analog of ${CMAKE_BINARY_DIR}. See the comment
-  # above the cheetah-copy-to-build-dir target for more details.
-  #
-  # NOTE: The trailing slash after the directory to copy is required.
-  #
+  # Cheetah stages a complete prefix layout. Copy its contents to the final
+  # install prefix, including when cmake --install supplies a prefix override.
   install(DIRECTORY ${KITSUNE_CHEETAH_INSTALL_DIR}/
-    DESTINATION ${CMAKE_INSTALL_PREFIX}
+    DESTINATION .
     USE_SOURCE_PERMISSIONS)
 
   # The values here are populated given that we know where Cheetah will be
@@ -589,10 +581,8 @@ ExternalProject_Add(kitrt
              -DKITRT_TEST_THREAD_SANITIZER=${KITRT_TEST_THREAD_SANITIZER}
              -DKITRT_ENABLE_DEBUG=${KITRT_ENABLE_DEBUG}
              -DKITRT_ENABLE_VERBOSE=${KITRT_ENABLE_VERBOSE}
-             -DKITRT_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
              -DKITCUDA_ENABLE_NVTX=${KITCUDA_ENABLE_NVTX}
              -DCLANG_RESOURCE_INTDIR=${CLANG_RESOURCE_INTDIR}
-             -DCLANG_RESOURCE_DIR=${CLANG_RESOURCE_INSTALL_DIR}
              -DCLANG_RESOURCE_SUBDIR=${CLANG_RESOURCE_SUBDIR}
              -DLLVM_CONFIG_PATH=${LLVM_RUNTIME_OUTPUT_INTDIR}/llvm-config
              -DLLVM_VERSION_MAJOR=${LLVM_VERSION_MAJOR}
@@ -636,11 +626,7 @@ add_custom_target(kitrt-copy-to-build-dir ALL
 )
 add_dependencies(kitrt-copy-to-build-dir kitrt)
 
-# Add a custom target to install opencilk to the final install directory with
-# the rest of kitsune.
-#
-# NOTE: The trailing slash after the directory to copy is required.
-#
+# Copy the contents of kitrt's staging prefix to the final install prefix.
 install(DIRECTORY ${KITSUNE_KITRT_INSTALL_DIR}/
-  DESTINATION ${CMAKE_INSTALL_PREFIX}
+  DESTINATION .
   USE_SOURCE_PERMISSIONS)

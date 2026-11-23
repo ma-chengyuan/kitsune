@@ -1782,6 +1782,11 @@ void ToolChain::AddKitsuneLinkerArgs(const ArgList &Args,
                       options::OPT_r))
         break;
 
+      if (Args.hasArg(options::OPT_static_pie)) {
+        D.Diag(diag::err_drv_opencilk_static_pie_unsupported);
+        break;
+      }
+
       bool StaticOpenCilk = Args.hasArg(options::OPT_static);
       bool UseAsan = getSanitizerArgs(Args).needsAsanRt();
 

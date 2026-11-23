@@ -1263,6 +1263,13 @@ bool Driver::loadDefaultConfigFiles(llvm::cl::ExpansionContext &ExpCtx) {
   return false;
 }
 
+static bool requiresCilkPlusTapirTarget(const Action *A) {
+  if (isa<LinkJobAction, LinkerWrapperJobAction>(A) ||
+      (isa<BackendJobAction>(A) && A->getType() == types::TY_PP_Asm))
+    return true;
+  return llvm::any_of(A->inputs(), requiresCilkPlusTapirTarget);
+}
+
 Compilation *Driver::BuildCompilation(ArrayRef<const char *> ArgList) {
   llvm::PrettyStackTraceString CrashInfo("Compilation construction");
 
@@ -1611,6 +1618,18 @@ Compilation *Driver::BuildCompilation(ArrayRef<const char *> ArgList) {
   if (CCCPrintPhases) {
     PrintActions(*C);
     return C;
+  }
+
+  if (TranslatedArgs->hasArgNoClaim(options::OPT_fcilkplus) &&
+      !TranslatedArgs->hasArgNoClaim(options::OPT_fopencilk,
+                                     options::OPT_fopencilk_kitsune)) {
+    const Arg *Target = TranslatedArgs->getLastArgNoClaim(options::OPT_ftapir_EQ);
+    if ((!Target || StringRef(Target->getValue()) == "none") &&
+        llvm::any_of(C->getActions(), requiresCilkPlusTapirTarget)) {
+      Diag(diag::err_drv_cilkplus_requires_tapir_target);
+      C->setContainsError();
+      return C;
+    }
   }
 
   BuildJobs(*C);
