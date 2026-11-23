@@ -12,6 +12,14 @@ endfunction()
 
 add_cuda_launch_cache_test(cuda-launch-cache-test)
 
+if(TARGET zera_alloc)
+  add_executable(zera-allocation-shim-test zera_allocation_shim_test.cpp)
+  target_compile_features(zera-allocation-shim-test PRIVATE cxx_std_17)
+  target_compile_options(zera-allocation-shim-test PRIVATE -fsized-deallocation)
+  target_link_libraries(zera-allocation-shim-test PRIVATE zera_alloc)
+  add_test(NAME zera-allocation-shim-test COMMAND zera-allocation-shim-test)
+endif()
+
 if(KITRT_TEST_THREAD_SANITIZER)
   include(CheckCXXCompilerFlag)
   include(CMakePushCheckState)
