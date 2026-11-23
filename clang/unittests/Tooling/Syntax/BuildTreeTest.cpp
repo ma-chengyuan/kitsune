@@ -321,6 +321,41 @@ ForStatement Statement
 )txt"}));
 }
 
+TEST_P(BuildSyntaxTreeTest, CilkFor) {
+  if (!GetParam().isCXX() || GetParam().hasDelayedTemplateParsing())
+    return;
+
+  llvm::Annotations Code(R"cpp(
+int start();
+void use(int);
+void f(int n) {
+  $counted[[_Cilk_for (int i = $init[[start()]]; i < n; ++i) $counted_body[[{ use(i); }]]]]
+  $fallback[[_Cilk_for (int i = start(); i < n; i = i + 1) $fallback_body[[use(i);]]]]
+}
+template <typename T> void g(T n) {
+  $dependent[[_Cilk_for (T i = 0; i < n; ++i) $dependent_body[[{ use(i); }]]]]
+}
+)cpp");
+  auto *Root = buildTree(Code.code(), GetParam(), {"-fopencilk", "-ftapir=none"});
+  ASSERT_NE(Root, nullptr);
+  ASSERT_EQ(Diags->getClient()->getNumErrors(), 0u);
+  for (StringRef Name : {"counted", "fallback", "dependent"}) {
+    SCOPED_TRACE(Name);
+    auto *Loop = dyn_cast_or_null<CilkForStatement>(
+        nodeByRange(Code.range(Name), Root));
+    ASSERT_NE(Loop, nullptr);
+    auto *Keyword = Loop->getForKeyword();
+    ASSERT_NE(Keyword, nullptr);
+    EXPECT_EQ(TM->getToken(Keyword->getTokenKey())->text(*SourceMgr),
+              "_Cilk_for");
+    auto *Body = nodeByRange(Code.range((Name + "_body").str()), Root);
+    ASSERT_NE(Body, nullptr);
+    EXPECT_EQ(Loop->getBody(), Body);
+  }
+  EXPECT_TRUE(isa_and_nonnull<CallExpression>(
+      nodeByRange(Code.range("init"), Root)));
+}
+
 TEST_P(BuildSyntaxTreeTest, RangeBasedFor) {
   if (!GetParam().isCXX11OrLater()) {
     return;

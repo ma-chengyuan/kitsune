@@ -506,10 +506,13 @@ public:
     return false;
   }
 
-  ArrayRef<syntax::Token> getDeclarationRange(Decl *D) {
+  ArrayRef<syntax::Token> getDeclarationRange(Decl *D,
+                                             SourceLocation End = {}) {
     ArrayRef<syntax::Token> Tokens;
+    if (End.isValid())
+      Tokens = getRange(D->getBeginLoc(), End);
     // We want to drop the template parameters for specializations.
-    if (const auto *S = dyn_cast<TagDecl>(D))
+    else if (const auto *S = dyn_cast<TagDecl>(D))
       Tokens = getRange(S->TypeDecl::getBeginLoc(), S->getEndLoc());
     else
       Tokens = getRange(D->getSourceRange());
@@ -852,25 +855,22 @@ public:
   }
 
   bool TraverseCilkForStmt(CilkForStmt *S) {
-    // We override to traverse simple loop variable as VarDecl.
-    bool Result = [&, this]() {
-      if (S->getLoopVarStmt()) {
-        if (S->getLoopVariable() && !TraverseDecl(S->getLoopVariable()))
+    if (S->getLoopVarStmt()) {
+      // Sema moved the written initializer to an implicit variable. Fold it
+      // before folding the written declaration that owns those tokens.
+      auto *Var = S->getLoopVariable();
+      auto *Init = cast<Expr>(S->getOriginalInit());
+      if (!TraverseTypeLoc(Var->getTypeSourceInfo()->getTypeLoc()) ||
+          !TraverseStmt(Init) || !processDeclaratorAndDeclaration(Var, Init))
+        return false;
+    } else {
+      for (Decl *D : cast<DeclStmt>(S->getInit())->decls())
+        if (!TraverseDecl(D))
           return false;
-        if (S->getOriginalInit() && !TraverseStmt(S->getOriginalInit()))
-          return false;
-        if (S->getOriginalCond() && !TraverseStmt(S->getOriginalCond()))
-          return false;
-        if (S->getOriginalInc() && !TraverseStmt(S->getOriginalInc()))
-          return false;
-        if (S->getBody() && !TraverseStmt(S->getBody()))
-          return false;
-        return true;
-      }
-      return TraverseStmt(S);
-    }();
-    WalkUpFromCilkForStmt(S);
-    return Result;
+    }
+    return TraverseStmt(S->getOriginalCond()) &&
+           TraverseStmt(S->getOriginalInc()) && TraverseStmt(S->getBody()) &&
+           WalkUpFromCilkForStmt(S);
   }
 
   bool TraverseStmt(Stmt *S) {
@@ -1614,17 +1614,21 @@ public:
 private:
   /// Folds SimpleDeclarator node (if present) and in case this is the last
   /// declarator in the chain it also folds SimpleDeclaration node.
-  template <class T> bool processDeclaratorAndDeclaration(T *D) {
+  template <class T>
+  bool processDeclaratorAndDeclaration(T *D, Expr *WrittenInit = nullptr) {
+    auto InitRange =
+        WrittenInit ? WrittenInit->getSourceRange() : getInitializerRange(D);
+    SourceLocation DeclEnd = WrittenInit ? InitRange.getEnd() : SourceLocation();
     auto Range = getDeclaratorRange(
         Builder.sourceManager(), D->getTypeSourceInfo()->getTypeLoc(),
-        getQualifiedNameStart(D), getInitializerRange(D));
+        getQualifiedNameStart(D), InitRange);
 
     // There doesn't have to be a declarator (e.g. `void foo(int)` only has
     // declaration, but no declarator).
     if (!Range.getBegin().isValid()) {
       Builder.markChild(new (allocator()) syntax::DeclaratorList,
                         syntax::NodeRole::Declarators);
-      Builder.foldNode(Builder.getDeclarationRange(D),
+      Builder.foldNode(Builder.getDeclarationRange(D, DeclEnd),
                        new (allocator()) syntax::SimpleDeclaration, D);
       return true;
     }
@@ -1641,7 +1645,7 @@ private:
         Builder.markChildToken(DelimiterToken, syntax::NodeRole::ListDelimiter);
     } else {
       auto *DL = new (allocator()) syntax::DeclaratorList;
-      auto DeclarationRange = Builder.getDeclarationRange(D);
+      auto DeclarationRange = Builder.getDeclarationRange(D, DeclEnd);
       Builder.foldList(DeclarationRange, DL, nullptr);
 
       Builder.markChild(DL, syntax::NodeRole::Declarators);

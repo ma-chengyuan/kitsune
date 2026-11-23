@@ -322,6 +322,16 @@ syntax::Statement *syntax::RangeBasedForStatement::getBody() {
       findChild(syntax::NodeRole::BodyStatement));
 }
 
+syntax::Leaf *syntax::CilkForStatement::getForKeyword() {
+  return cast_or_null<syntax::Leaf>(
+      findChild(syntax::NodeRole::IntroducerKeyword));
+}
+
+syntax::Statement *syntax::CilkForStatement::getBody() {
+  return cast_or_null<syntax::Statement>(
+      findChild(syntax::NodeRole::BodyStatement));
+}
+
 syntax::Expression *syntax::ExpressionStatement::getExpression() {
   return cast_or_null<syntax::Expression>(
       findChild(syntax::NodeRole::Expression));

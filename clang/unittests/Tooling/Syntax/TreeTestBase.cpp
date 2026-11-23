@@ -64,7 +64,8 @@ std::vector<TestClangConfig> clang::syntax::allTestClangConfigs() {
 }
 
 syntax::TranslationUnit *
-SyntaxTreeTest::buildTree(StringRef Code, const TestClangConfig &ClangConfig) {
+SyntaxTreeTest::buildTree(StringRef Code, const TestClangConfig &ClangConfig,
+                          ArrayRef<StringRef> ExtraArgs) {
   // FIXME: this code is almost the identical to the one in TokensTest. Share
   //        it.
   class BuildSyntaxTree : public ASTConsumer {
@@ -133,6 +134,8 @@ SyntaxTreeTest::buildTree(StringRef Code, const TestClangConfig &ClangConfig) {
       "-fsyntax-only",
   };
   llvm::copy(ClangConfig.getCommandLineArgs(), std::back_inserter(Args));
+  for (StringRef Arg : ExtraArgs)
+    Args.push_back(Arg.str());
   Args.push_back(FileName);
 
   std::vector<const char *> ArgsCStr;

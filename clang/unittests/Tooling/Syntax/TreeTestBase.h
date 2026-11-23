@@ -32,8 +32,8 @@ class SyntaxTreeTest : public ::testing::Test,
                        public ::testing::WithParamInterface<TestClangConfig> {
 protected:
   // Build a syntax tree for the code.
-  TranslationUnit *buildTree(StringRef Code,
-                             const TestClangConfig &ClangConfig);
+  TranslationUnit *buildTree(StringRef Code, const TestClangConfig &ClangConfig,
+                             ArrayRef<StringRef> ExtraArgs = {});
 
   /// Finds the deepest node in the tree that covers exactly \p R.
   /// FIXME: implement this efficiently and move to public syntax tree API.
