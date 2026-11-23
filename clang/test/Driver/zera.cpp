@@ -8,7 +8,7 @@
 // RUN: touch %t/cuda/bin/ptxas %t/cuda/bin/fatbinary %t/cuda/nvvm/libdevice/libdevice.10.bc
 // RUN: touch %t/existing.o
 
-// RUN: %clangxx --target=x86_64-unknown-linux-gnu -### -fzera -c \
+// RUN: env CUDAABI_TARGET=sm_00 %clangxx --target=x86_64-unknown-linux-gnu -### -fzera -c \
 // RUN:   -resource-dir %t/relocated --cuda-path=%t/cuda \
 // RUN:   --cuabi-arch=sm_80 --cuabi-dont-fuse-reducers --cuabi-naive-atomics %s 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=CODEGEN --implicit-check-not='error:'
@@ -26,7 +26,7 @@
 // CODEGEN-SAME: "-mllvm" "--cuabi-naive-atomics"
 // CODEGEN-NOT: libzera_alloc
 
-// RUN: %clangxx --target=x86_64-unknown-linux-gnu -### -fzera -c \
+// RUN: env CUDAABI_TARGET=sm_00 %clangxx --target=x86_64-unknown-linux-gnu -### -fzera -c \
 // RUN:   -resource-dir %t/relocated --cuda-path=%t/cuda \
 // RUN:   -mllvm -cuabi-arch -mllvm sm_80 %s 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=LLVM-ARCH --implicit-check-not='error:'
@@ -97,6 +97,8 @@
 // RUN:   | FileCheck %s --check-prefix=BAD-ARCH
 // RUN: not %clangxx --target=x86_64-unknown-linux-gnu -### -fzera -c -mllvm -cuabi-arch -mllvm sm_00 %s 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=BAD-ARCH
+// RUN: not env CUDAABI_TARGET=sm_00 %clangxx --target=x86_64-unknown-linux-gnu -### -fzera -c %s 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=BAD-ARCH-ENV
 // RUN: not %clangxx --target=x86_64-unknown-linux-gnu -### -fzera \
 // RUN:   -resource-dir %t/relocated --cuda-path=%t/cuda -c %s 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=MISSING-KITCUDA
@@ -105,6 +107,7 @@
 // BAD-TAPIR: error: invalid argument '-ftapir=cuda' not allowed with '-fzera'
 // BAD-CUABI: error: invalid argument '--cuabi-arch=sm_80' only allowed with '-fzera'
 // BAD-ARCH: error: unsupported CUDA architecture 'sm_00' for '-fzera'
+// BAD-ARCH-ENV: error: unsupported CUDA architecture 'sm_00' in CUDAABI_TARGET for '-fzera'
 // MISSING-KITCUDA: error: cannot find '-fzera' KitCUDA ABI bitcode: '{{[^']*}}/relocated/lib/kitcuda.bc'
 
 int main() {}

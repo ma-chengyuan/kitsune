@@ -846,6 +846,8 @@ def err_drv_zera_unavailable : Error<
   "'-fzera' requires a build with OpenCilk and CUDA Tapir support and the NVPTX target">;
 def err_drv_zera_cuda_arch : Error<
   "unsupported CUDA architecture '%0' for '-fzera'">;
+def err_drv_zera_cuda_arch_env : Error<
+  "unsupported CUDA architecture '%0' in CUDAABI_TARGET for '-fzera'">;
 def err_drv_zera_missing_file : Error<
   "cannot find '-fzera' %0: '%1'">;
 

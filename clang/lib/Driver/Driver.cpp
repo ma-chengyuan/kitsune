@@ -1279,6 +1279,7 @@ static bool hasBackendAction(const Action *A) {
 
 static bool checkZeraCudaArch(const Driver &D, const ArgList &Args) {
   bool NeedsValue = false;
+  bool HasExplicitArch = false;
   for (const Arg *A :
        Args.filtered(options::OPT_mllvm, options::OPT_cuabi_arch_EQ,
                      options::OPT_cuabi_dont_fuse_reducers,
@@ -1309,11 +1310,19 @@ static bool checkZeraCudaArch(const Driver &D, const ArgList &Args) {
       D.Diag(diag::err_drv_zera_cuda_arch) << Arg;
       return false;
     }
+    HasExplicitArch = true;
     NeedsValue = false;
   }
   if (NeedsValue) {
     D.Diag(diag::err_drv_missing_argument) << "-cuabi-arch" << 1;
     return false;
+  }
+  if (!HasExplicitArch) {
+    if (auto EnvArch = llvm::sys::Process::GetEnv("CUDAABI_TARGET");
+        EnvArch && llvm::getTapirCudaVirtualArch(*EnvArch).empty()) {
+      D.Diag(diag::err_drv_zera_cuda_arch_env) << *EnvArch;
+      return false;
+    }
   }
   return true;
 }
