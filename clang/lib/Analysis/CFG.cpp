@@ -24,6 +24,7 @@
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtCXX.h"
+#include "clang/AST/StmtCilk.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/AST/Type.h"
@@ -589,6 +590,11 @@ private:
   CFGBlock *VisitExprWithCleanups(ExprWithCleanups *E,
                                   AddStmtChoice asc, bool ExternallyDestructed);
   CFGBlock *VisitForStmt(ForStmt *F);
+  CFGBlock *VisitCilkForStmt(CilkForStmt *F);
+  CFGBlock *VisitCilkForRangeStmt(CilkForRangeStmt *F);
+  CFGBlock *VisitForLoop(Stmt *Loop, ArrayRef<Stmt *> Init, Expr *Cond,
+                         Expr *Inc, Stmt *Body, DeclStmt *ConditionVar = nullptr,
+                         ArrayRef<Stmt *> IterationInit = {});
   CFGBlock *VisitGotoStmt(GotoStmt *G);
   CFGBlock *VisitGCCAsmStmt(GCCAsmStmt *G, AddStmtChoice asc);
   CFGBlock *VisitIfStmt(IfStmt *I);
@@ -2295,6 +2301,9 @@ CFGBlock *CFGBuilder::Visit(Stmt * S, AddStmtChoice asc,
     case Stmt::CXXForRangeStmtClass:
       return VisitCXXForRangeStmt(cast<CXXForRangeStmt>(S));
 
+    case Stmt::CilkForRangeStmtClass:
+      return VisitCilkForRangeStmt(cast<CilkForRangeStmt>(S));
+
     case Stmt::DeclStmtClass:
       return VisitDeclStmt(cast<DeclStmt>(S));
 
@@ -2306,6 +2315,9 @@ CFGBlock *CFGBuilder::Visit(Stmt * S, AddStmtChoice asc,
 
     case Stmt::ForStmtClass:
       return VisitForStmt(cast<ForStmt>(S));
+
+    case Stmt::CilkForStmtClass:
+      return VisitCilkForStmt(cast<CilkForStmt>(S));
 
     case Stmt::GotoStmtClass:
       return VisitGotoStmt(cast<GotoStmt>(S));
@@ -3493,6 +3505,59 @@ CFGBlock *CFGBuilder::VisitGCCAsmStmt(GCCAsmStmt *G, AddStmtChoice asc) {
 }
 
 CFGBlock *CFGBuilder::VisitForStmt(ForStmt *F) {
+  Stmt *Init = F->getInit();
+  return VisitForLoop(F, Init ? ArrayRef(Init) : ArrayRef<Stmt *>(),
+                      F->getCond(), F->getInc(), F->getBody(),
+                      F->getConditionVariableDeclStmt());
+}
+
+CFGBlock *CFGBuilder::VisitCilkForStmt(CilkForStmt *F) {
+  if (!F->getInitCond())
+    return VisitForLoop(F, F->getInit(), F->getCond(), F->getInc(),
+                        F->getBody());
+
+  SaveAndRestore SaveScope(ScopePos);
+  addLocalScopeForStmt(F->getInit());
+  addLocalScopeForStmt(F->getLimitStmt());
+  addAutomaticObjHandling(ScopePos, SaveScope.get(), F);
+  CFGBlock *LoopExit = Block ? Block : Succ;
+
+  // Compute the transformed bounds only if the loop has iterations.
+  CFGBlock *LoopHead = VisitForLoop(F, {F->getBeginStmt(), F->getEndStmt()},
+                                    F->getCond(), F->getInc(), F->getBody(),
+                                    nullptr, {F->getLoopVarStmt()});
+  if (badCFG)
+    return nullptr;
+
+  Block = createBlock(false);
+  Block->setTerminator(CFGTerminator(F, CFGTerminator::CilkForEntryBranch));
+  TryResult KnownVal = tryEvaluateBool(F->getInitCond());
+  addSuccessor(Block, LoopHead, !KnownVal.isFalse());
+  addSuccessor(Block, LoopExit, !KnownVal.isTrue());
+  addStmt(F->getInitCond());
+  addStmt(F->getLimitStmt());
+  return addStmt(F->getInit());
+}
+
+CFGBlock *CFGBuilder::VisitCilkForRangeStmt(CilkForRangeStmt *F) {
+  if (!F->getCond())
+    return NYS();
+
+  CXXForRangeStmt *Range = F->getCXXForRangeStmt();
+  SmallVector<Stmt *, 6> Init;
+  if (Range->getInit())
+    Init.push_back(Range->getInit());
+  Init.append({Range->getRangeStmt(), Range->getBeginStmt(), Range->getEndStmt(),
+               F->getLoopIndexStmt(), F->getLimitStmt()});
+  return VisitForLoop(F, Init, F->getCond(), F->getInc(), Range->getBody(),
+                      nullptr, {F->getLocalLoopIndexStmt(),
+                                Range->getLoopVarStmt()});
+}
+
+CFGBlock *CFGBuilder::VisitForLoop(Stmt *Loop, ArrayRef<Stmt *> Init,
+                                  Expr *Cond, Expr *Inc, Stmt *Body,
+                                  DeclStmt *ConditionVar,
+                                  ArrayRef<Stmt *> IterationInit) {
   CFGBlock *LoopSuccessor = nullptr;
 
   // Save local scope position because in case of condition variable ScopePos
@@ -3502,17 +3567,19 @@ CFGBlock *CFGBuilder::VisitForStmt(ForStmt *F) {
   // Create local scope for init statement and possible condition variable.
   // Add destructor for init statement and condition variable.
   // Store scope position for continue statement.
-  if (Stmt *Init = F->getInit())
-    addLocalScopeForStmt(Init);
+  for (Stmt *I : Init)
+    addLocalScopeForStmt(I);
   LocalScope::const_iterator LoopBeginScopePos = ScopePos;
 
-  if (VarDecl *VD = F->getConditionVariable())
+  auto *VD = ConditionVar ? cast<VarDecl>(ConditionVar->getSingleDecl())
+                          : nullptr;
+  if (VD)
     addLocalScopeForVarDecl(VD);
   LocalScope::const_iterator ContinueScopePos = ScopePos;
 
-  addAutomaticObjHandling(ScopePos, save_scope_pos.get(), F);
+  addAutomaticObjHandling(ScopePos, save_scope_pos.get(), Loop);
 
-  addLoopExit(F);
+  addLoopExit(Loop);
 
   // "for" is a control-flow statement.  Thus we stop processing the current
   // block.
@@ -3532,7 +3599,7 @@ CFGBlock *CFGBuilder::VisitForStmt(ForStmt *F) {
 
   // Now create the loop body.
   {
-    assert(F->getBody());
+    assert(Body);
 
     // Save the current values for Block, Succ, continue and break targets.
     SaveAndRestore save_Block(Block), save_Succ(Succ);
@@ -3542,17 +3609,17 @@ CFGBlock *CFGBuilder::VisitForStmt(ForStmt *F) {
     // to the head of the loop.  If we have increment code, it will
     // go in this block as well.
     Block = Succ = TransitionBlock = createBlock(false);
-    TransitionBlock->setLoopTarget(F);
+    TransitionBlock->setLoopTarget(Loop);
 
 
     // Loop iteration (after increment) should end with destructor of Condition
     // variable (if any).
-    addAutomaticObjHandling(ScopePos, LoopBeginScopePos, F);
+    addAutomaticObjHandling(ScopePos, LoopBeginScopePos, Loop);
 
-    if (Stmt *I = F->getInc()) {
+    if (Inc) {
       // Generate increment code in its own basic block.  This is the target of
       // continue statements.
-      Succ = addStmt(I);
+      Succ = addStmt(Inc);
     }
 
     // Finish up the increment (or empty) block if it hasn't been already.
@@ -3566,25 +3633,33 @@ CFGBlock *CFGBuilder::VisitForStmt(ForStmt *F) {
    // The starting block for the loop increment is the block that should
    // represent the 'loop target' for looping back to the start of the loop.
    ContinueJumpTarget = JumpTarget(Succ, ContinueScopePos);
-   ContinueJumpTarget.block->setLoopTarget(F);
+   ContinueJumpTarget.block->setLoopTarget(Loop);
 
+    // Cilk iterations initialize a private loop variable in the body scope.
+    for (Stmt *I : IterationInit)
+      addLocalScopeAndDtors(I);
 
     // If body is not a compound statement create implicit scope
     // and add destructors.
-    if (!isa<CompoundStmt>(F->getBody()))
-      addLocalScopeAndDtors(F->getBody());
+    if (!isa<CompoundStmt>(Body))
+      addLocalScopeAndDtors(Body);
 
     // Now populate the body block, and in the process create new blocks as we
     // walk the body of the loop.
-    BodyBlock = addStmt(F->getBody());
+    BodyBlock = addStmt(Body);
+    if (badCFG)
+      return nullptr;
+    for (Stmt *I : llvm::reverse(IterationInit)) {
+      BodyBlock = addStmt(I);
+      if (badCFG)
+        return nullptr;
+    }
 
     if (!BodyBlock) {
       // In the case of "for (...;...;...);" we can have a null BodyBlock.
       // Use the continue jump target as the proxy for the body.
       BodyBlock = ContinueJumpTarget.block;
     }
-    else if (badCFG)
-      return nullptr;
   }
 
   // Because of short-circuit evaluation, the condition of the loop can span
@@ -3593,54 +3668,52 @@ CFGBlock *CFGBuilder::VisitForStmt(ForStmt *F) {
   CFGBlock *EntryConditionBlock = nullptr, *ExitConditionBlock = nullptr;
 
   do {
-    Expr *C = F->getCond();
     SaveAndRestore save_scope_pos(ScopePos);
 
     // Specially handle logical operators, which have a slightly
     // more optimal CFG representation.
-    if (BinaryOperator *Cond =
-            dyn_cast_or_null<BinaryOperator>(C ? C->IgnoreParens() : nullptr))
-      if (Cond->isLogicalOp()) {
+    if (auto *BinOp = dyn_cast_or_null<BinaryOperator>(
+            Cond ? Cond->IgnoreParens() : nullptr))
+      if (BinOp->isLogicalOp()) {
         std::tie(EntryConditionBlock, ExitConditionBlock) =
-          VisitLogicalOperator(Cond, F, BodyBlock, LoopSuccessor);
+            VisitLogicalOperator(BinOp, Loop, BodyBlock, LoopSuccessor);
         break;
       }
 
     // The default case when not handling logical operators.
     EntryConditionBlock = ExitConditionBlock = createBlock(false);
-    ExitConditionBlock->setTerminator(F);
+    ExitConditionBlock->setTerminator(Loop);
 
     // See if this is a known constant.
     TryResult KnownVal(true);
 
-    if (C) {
+    if (Cond) {
       // Now add the actual condition to the condition block.
       // Because the condition itself may contain control-flow, new blocks may
       // be created.  Thus we update "Succ" after adding the condition.
       Block = ExitConditionBlock;
-      EntryConditionBlock = addStmt(C);
+      EntryConditionBlock = addStmt(Cond);
 
       // If this block contains a condition variable, add both the condition
       // variable and initializer to the CFG.
-      if (VarDecl *VD = F->getConditionVariable()) {
-        if (Expr *Init = VD->getInit()) {
+      if (VD) {
+        if (Expr *VarInit = VD->getInit()) {
           autoCreateBlock();
-          const DeclStmt *DS = F->getConditionVariableDeclStmt();
-          assert(DS->isSingleDecl());
           findConstructionContexts(
-              ConstructionContextLayer::create(cfg->getBumpVectorContext(), DS),
-              Init);
-          appendStmt(Block, DS);
-          EntryConditionBlock = addStmt(Init);
+              ConstructionContextLayer::create(cfg->getBumpVectorContext(),
+                                               ConditionVar),
+              VarInit);
+          appendStmt(Block, ConditionVar);
+          EntryConditionBlock = addStmt(VarInit);
           assert(Block == EntryConditionBlock);
-          maybeAddScopeBeginForVarDecl(EntryConditionBlock, VD, C);
+          maybeAddScopeBeginForVarDecl(EntryConditionBlock, VD, Cond);
         }
       }
 
       if (Block && badCFG)
         return nullptr;
 
-      KnownVal = tryEvaluateBool(C);
+      KnownVal = tryEvaluateBool(Cond);
     }
 
     // Add the loop body entry as a successor to the condition.
@@ -3659,11 +3732,17 @@ CFGBlock *CFGBuilder::VisitForStmt(ForStmt *F) {
 
   // If the loop contains initialization, create a new block for those
   // statements.  This block can also contain statements that precede the loop.
-  if (Stmt *I = F->getInit()) {
+  if (!Init.empty()) {
     SaveAndRestore save_scope_pos(ScopePos);
     ScopePos = LoopBeginScopePos;
     Block = createBlock();
-    return addStmt(I);
+    CFGBlock *Head = Block;
+    for (Stmt *I : llvm::reverse(Init)) {
+      Head = addStmt(I);
+      if (badCFG)
+        return nullptr;
+    }
+    return Head;
   }
 
   // There is no loop initialization.  We are thus basically a while loop.
@@ -5638,6 +5717,11 @@ public:
     case CFGTerminator::VirtualBaseBranch:
       OS << "(See if most derived ctor has already initialized vbases)";
       break;
+    case CFGTerminator::CilkForEntryBranch:
+      OS << "_Cilk_for entry ";
+      cast<CilkForStmt>(T.getStmt())->getInitCond()->printPretty(OS, Helper,
+                                                               Policy);
+      break;
     }
   }
 };
@@ -6277,6 +6361,18 @@ Stmt *CFGBlock::getTerminatorCondition(bool StripParens) {
 
     case Stmt::ForStmtClass:
       E = cast<ForStmt>(Terminator)->getCond();
+      break;
+
+    case Stmt::CilkForStmtClass: {
+      auto *Loop = cast<CilkForStmt>(Terminator);
+      E = getTerminator().getKind() == CFGTerminator::CilkForEntryBranch
+              ? Loop->getInitCond()
+              : Loop->getCond();
+      break;
+    }
+
+    case Stmt::CilkForRangeStmtClass:
+      E = cast<CilkForRangeStmt>(Terminator)->getCond();
       break;
 
     case Stmt::WhileStmtClass:

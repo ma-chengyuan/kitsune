@@ -377,6 +377,11 @@ public:
         if (!V)
           continue;
 
+        // The initializer of this per-iteration copy is synthesized. The
+        // initializer in source determines the first iteration's value.
+        if (V->isSimpleCilkForLVDecl())
+          continue;
+
         if (V->hasLocalStorage()) {
           // Reference types confuse the dead stores checker.  Skip them
           // for now.

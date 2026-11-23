@@ -4081,7 +4081,11 @@ StmtResult Sema::BuildCilkForRangeStmt(CXXForRangeStmt *ForRange) {
   VarDecl *LocalLoopIndex =
       BuildForRangeVarDecl(*this, RangeLoc, LimitExpr.get()->getType(),
                            std::string("__local_loopindex"));
-  AddInitializerToDecl(LocalLoopIndex, LoopIndexRef.get(),
+  // The CFG evaluates the condition, local initialization, and increment in
+  // separate blocks, so each needs its own reference to the loop index.
+  ExprResult LocalIndexInit =
+      BuildDeclRefExpr(LoopIndex, LoopIndex->getType(), VK_LValue, RangeLoc);
+  AddInitializerToDecl(LocalLoopIndex, LocalIndexInit.get(),
                        /*DirectInit=*/false);
   FinalizeDeclaration(LocalLoopIndex);
   CurContext->addHiddenDecl(LocalLoopIndex);
@@ -4093,11 +4097,10 @@ StmtResult Sema::BuildCilkForRangeStmt(CXXForRangeStmt *ForRange) {
   if (LocalLoopIndexStmt.isInvalid())
     return StmtError();
 
-  // Create a new increment operation on the new beginning variable, and add it
-  // to the existing increment operation.
   SourceLocation IncLoc = RangeLoc;
-  ExprResult NewInc =
-      ActOnUnaryOp(S, IncLoc, tok::plusplus, LoopIndexRef.get());
+  ExprResult IncIndexRef =
+      BuildDeclRefExpr(LoopIndex, LoopIndex->getType(), VK_LValue, IncLoc);
+  ExprResult NewInc = ActOnUnaryOp(S, IncLoc, tok::plusplus, IncIndexRef.get());
   if (NewInc.isInvalid())
     return StmtError();
 

@@ -542,11 +542,14 @@ public:
     /// virtual base classes have already been initialized by the constructor
     /// of the most derived class while we're in the base class.
     VirtualBaseBranch,
+    /// The initial condition of a counted Cilk loop, before computing its
+    /// normalized bounds.
+    CilkForEntryBranch,
 
     /// Number of different kinds, for assertions. We subtract 1 so that
     /// to keep receiving compiler warnings when we don't cover all enum values
     /// in a switch.
-    NumKindsMinusOne = VirtualBaseBranch
+    NumKindsMinusOne = CilkForEntryBranch
   };
 
 private:
