@@ -16,7 +16,9 @@ struct CUstream_st {};
 namespace {
 
 int Image;
+int OtherImage;
 CUmod_st Module;
+CUmod_st OtherModule;
 CUstream_st Stream;
 const char KernelAName[] = "kernel_a";
 const char KernelBName[] = "kernel_b";
@@ -24,6 +26,7 @@ const char KernelCName[] = "kernel_c";
 CUfunc_st KernelA{128};
 CUfunc_st KernelB{256};
 CUfunc_st KernelC{64};
+CUfunc_st OtherKernelA{512};
 constexpr CUdeviceptr GlobalSymbol = 4096;
 std::atomic<unsigned> ModuleLoads{0};
 std::atomic<unsigned> KernelLookups{0};
@@ -37,15 +40,22 @@ void check(bool Condition, const char *Message) {
 }
 
 CUresult loadModule(CUmodule *Result, const void *Data) {
-  check(Data == &Image, "unexpected CUDA image");
-  *Result = &Module;
+  if (Data == &Image)
+    *Result = &Module;
+  else {
+    check(Data == &OtherImage, "unexpected CUDA image");
+    *Result = &OtherModule;
+  }
   ModuleLoads.fetch_add(1, std::memory_order_relaxed);
   return CUDA_SUCCESS;
 }
 
 CUresult getFunction(CUfunction *Result, CUmodule Loaded, const char *Name) {
-  check(Loaded == &Module, "unexpected CUDA module");
-  if (Name == KernelAName)
+  check(Loaded == &Module || Loaded == &OtherModule, "unexpected CUDA module");
+  if (Loaded == &OtherModule) {
+    check(Name == KernelAName, "unexpected kernel name in second module");
+    *Result = &OtherKernelA;
+  } else if (Name == KernelAName)
     *Result = &KernelA;
   else if (Name == KernelBName)
     *Result = &KernelB;
@@ -77,6 +87,8 @@ CUresult launch(CUfunction Function, unsigned Blocks, unsigned, unsigned,
                 unsigned Threads, unsigned, unsigned, unsigned, CUstream,
                 void **Args, void **) {
   uint64_t Trips = *static_cast<uint64_t *>(Args[0]);
+  check(Function == *static_cast<CUfunction *>(Args[1]),
+        "launched the wrong CUDA function");
   unsigned ExpectedThreads = Function->ThreadsPerBlock;
   check(Threads == ExpectedThreads, "unexpected threads per block");
   check(Blocks == (Trips - 1) / ExpectedThreads + 1,
@@ -84,10 +96,11 @@ CUresult launch(CUfunction Function, unsigned Blocks, unsigned, unsigned,
   return CUDA_SUCCESS;
 }
 
-void launchKernel(const char *Name, uint64_t Trips) {
-  void *Args[] = {&Trips};
-  check(__kitcuda_launch_kernel(&Image, Name, Args, Trips, 0, nullptr,
-                                &Stream) == &Stream,
+void launchKernel(const void *Data, const char *Name, uint64_t Trips,
+                  CUfunction ExpectedFunction) {
+  void *Args[] = {&Trips, &ExpectedFunction};
+  check(__kitcuda_launch_kernel(Data, Name, Args, Trips, 0, nullptr, &Stream) ==
+            &Stream,
         "unexpected CUDA stream");
 }
 
@@ -118,10 +131,11 @@ void __kitrt_print_stack_trace() { std::abort(); }
 int main() {
   __kitcuda_refine_occupancy_launches(false);
 
-  // Resolve both kernels and prime the launch cache before starting workers.
+  // Prime the cache with two modules that share the same kernel name pointer.
   constexpr uint64_t HotTrips = 300;
-  launchKernel(KernelAName, HotTrips);
-  launchKernel(KernelBName, HotTrips);
+  launchKernel(&Image, KernelAName, HotTrips, &KernelA);
+  launchKernel(&OtherImage, KernelAName, HotTrips, &OtherKernelA);
+  launchKernel(&Image, KernelBName, HotTrips, &KernelB);
 
   constexpr unsigned Workers = 4;
   constexpr unsigned TripsPerWorker = 128;
@@ -136,10 +150,11 @@ int main() {
 
       for (unsigned I = 0; I < TripsPerWorker; ++I) {
         uint64_t ColdTrips = HotTrips + 1 + Worker * TripsPerWorker + I;
-        launchKernel(KernelAName, HotTrips);
-        launchKernel(KernelBName, HotTrips);
-        launchKernel(KernelAName, ColdTrips);
-        launchKernel(KernelAName, ColdTrips);
+        launchKernel(&Image, KernelAName, HotTrips, &KernelA);
+        launchKernel(&OtherImage, KernelAName, HotTrips, &OtherKernelA);
+        launchKernel(&Image, KernelBName, HotTrips, &KernelB);
+        launchKernel(&Image, KernelAName, ColdTrips, &KernelA);
+        launchKernel(&Image, KernelAName, ColdTrips, &KernelA);
       }
     });
   }
@@ -149,15 +164,15 @@ int main() {
   for (auto &Thread : Threads)
     Thread.join();
 
-  check(OccupancyQueries == 2 + Workers * TripsPerWorker,
+  check(OccupancyQueries == 3 + Workers * TripsPerWorker,
         "expected one occupancy query per kernel and trip count");
-  check(KernelLookups == 2, "expected one lookup per kernel");
+  check(KernelLookups == 3, "expected one lookup per kernel in each module");
 
   check(__kitcuda_get_global_symbol(&Image, "global_a") == GlobalSymbol,
         "unexpected CUDA global address");
-  launchKernel(KernelCName, HotTrips);
+  launchKernel(&Image, KernelCName, HotTrips, &KernelC);
   check(__kitcuda_get_global_symbol(&Image, "global_b") == GlobalSymbol,
         "unexpected CUDA global address");
-  check(KernelLookups == 3, "expected one lookup per kernel");
-  check(ModuleLoads == 1, "kernel and global lookups should share the module");
+  check(KernelLookups == 4, "expected one lookup per kernel in each module");
+  check(ModuleLoads == 2, "kernel and global lookups should share the module");
 }

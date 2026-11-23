@@ -67,15 +67,15 @@ static KitCudaModuleMap _kitcuda_module_map;
 // Protects both the module and kernel maps.
 static std::mutex _kitcuda_module_cache_mutex;
 
-// *** EXPERIMENTAL: The runtime maintains a map from kernel names to
-// kernel functions.  This avoids searching a module repeatedly at
-// kernel launch time and is primiarly focused on reducing runtime
-// overheads.  The savings here still need to explored in more detail;
-// it is not clear how map overheads compare to the runtime lookup...
-//
-// TODO: Finish exploration of map vs. CUDA call overheads.
-typedef kitrt::unordered_map<const char *, CUfunction> KitCudaKernelMap;
-static KitCudaKernelMap _kitcuda_kernel_map;
+// The linker can merge kernel name strings from different fatbinaries.
+struct KitCudaKernelKey {
+  const void *fat_bin;
+  const char *kernel_name;
+
+  bool operator==(const KitCudaKernelKey &other) const {
+    return fat_bin == other.fat_bin && kernel_name == other.kernel_name;
+  }
+};
 
 struct KitCudaLaunchParamKey {
   CUfunction cu_func;
@@ -87,6 +87,15 @@ struct KitCudaLaunchParamKey {
 };
 
 namespace std {
+template <> struct hash<KitCudaKernelKey> {
+  size_t operator()(const KitCudaKernelKey &key) const {
+    size_t seed = std::hash<const void *>()(key.fat_bin);
+    // Use boost::hash_combine, as in KitCudaLaunchParamKey below.
+    return seed ^ (std::hash<const char *>()(key.kernel_name) + 0x9e3779b9 +
+                   (seed << 6) + (seed >> 2));
+  }
+};
+
 template <> struct hash<KitCudaLaunchParamKey> {
   size_t operator()(const KitCudaLaunchParamKey &key) const {
     size_t seed = 0;
@@ -100,6 +109,9 @@ template <> struct hash<KitCudaLaunchParamKey> {
   }
 };
 } // namespace std
+
+typedef kitrt::unordered_map<KitCudaKernelKey, CUfunction> KitCudaKernelMap;
+static KitCudaKernelMap _kitcuda_kernel_map;
 
 typedef kitrt::unordered_map<KitCudaLaunchParamKey, int> KitCudaLaunchParamMap;
 static KitCudaLaunchParamMap _kitcuda_launch_param_map;
@@ -121,14 +133,15 @@ CUmodule get_or_load_module(const void *fat_bin) {
 
 CUfunction get_or_load_kernel(const void *fat_bin, const char *kernel_name) {
   std::lock_guard<std::mutex> lock(_kitcuda_module_cache_mutex);
-  auto kernel = _kitcuda_kernel_map.find(kernel_name);
+  KitCudaKernelKey key = {fat_bin, kernel_name};
+  auto kernel = _kitcuda_kernel_map.find(key);
   if (kernel != _kitcuda_kernel_map.end())
     return kernel->second;
 
   CUmodule cu_module = get_or_load_module(fat_bin);
   CUfunction cu_func;
   CU_SAFE_CALL(cuModuleGetFunction_p(&cu_func, cu_module, kernel_name));
-  _kitcuda_kernel_map.emplace(kernel_name, cu_func);
+  _kitcuda_kernel_map.emplace(key, cu_func);
   return cu_func;
 }
 
