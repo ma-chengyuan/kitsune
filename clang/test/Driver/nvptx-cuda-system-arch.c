@@ -46,5 +46,5 @@
 // MARCH-sm_89: "-cc1" "-triple" "nvptx64-nvidia-cuda"{{.*}}"-target-cpu" "sm_89"
 
 // RUN:   not %clang -### --target=nvptx64-nvidia-cuda -nogpulib -march=native \
-// RUN:     --nvptx-arch-tool=%t/nvptx_arch_unsupported %s 2>&1 | FileCheck %s --check-prefix=MARCH-UNSUPPORTED
-// MARCH-UNSUPPORTED: error: cannot determine nvptx64 architecture: unsupported CUDA GPU architecture 'sm_999' reported by nvptx-arch
+// RUN:     --nvptx-arch-tool=%t/nvptx_arch_unsupported %s 2>&1 | FileCheck %s --check-prefix=MARCH-UNKNOWN-ARCH
+// MARCH-UNKNOWN-ARCH: error: cannot determine nvptx64 architecture: unsupported CUDA GPU architecture 'sm_999' reported by nvptx-arch

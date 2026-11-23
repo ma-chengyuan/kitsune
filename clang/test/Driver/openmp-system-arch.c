@@ -74,8 +74,8 @@
 
 // RUN:   not %clang -### --target=x86_64-unknown-linux-gnu -nogpulib -fopenmp=libomp \
 // RUN:     -fopenmp-targets=nvptx64-nvidia-cuda --nvptx-arch-tool=%t/nvptx_arch_unsupported %s 2>&1 \
-// RUN:   | FileCheck %s --check-prefix=NVPTX-UNSUPPORTED
-// NVPTX-UNSUPPORTED: error: cannot determine nvptx64 architecture: unsupported CUDA GPU architecture 'sm_999' reported by nvptx-arch
+// RUN:   | FileCheck %s --check-prefix=NVPTX-UNKNOWN-ARCH
+// NVPTX-UNKNOWN-ARCH: error: cannot determine nvptx64 architecture: unsupported CUDA GPU architecture 'sm_999' reported by nvptx-arch
 
 // case when 'amdgpu-arch' returns nothing using `-fopenmp-targets=`.
 // RUN:   not %clang -### --target=x86_64-unknown-linux-gnu -nogpulib -fopenmp=libomp \
