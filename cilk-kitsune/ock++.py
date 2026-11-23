@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# A Frankenstein compiler: merge OpenCilk frontend with Kitsune backend
+# Stage the Tapir frontend, lowering and linking steps for mixed CPU/CUDA code.
 
 import atexit
 import logging
@@ -22,7 +22,7 @@ Options:
     Those you would normally pass to clang++.
 
 Environment:
-    OPENCILK_PATH   Compatible OpenCilk build or install prefix
+    OPENCILK_PATH   Optional frontend override (defaults to KITSUNE_PATH)
     KITSUNE_PATH    Kitsune build prefix
     BUILD_DIR       Default parent directory for the opencilk and kitsune prefixes
 """
@@ -84,12 +84,10 @@ logger.addHandler(handler)
 class Invocation:
     def __init__(self) -> None:
         build = Path(os.environ.get("BUILD_DIR") or ARTIFACT_DIR.parent / "build")
-        self.cilk_path = Path(
-            os.environ.get("OPENCILK_PATH") or build / "opencilk"
-        ).absolute()
         self.kitsune_path = Path(
             os.environ.get("KITSUNE_PATH") or build / "kitsune"
         ).absolute()
+        self.cilk_path = Path(os.environ.get("OPENCILK_PATH") or self.kitsune_path).absolute()
         self.kitsune_lib = self.kitsune_path / "lib/clang/19/lib"
         self.kitsune_cilk_lib = self.kitsune_lib / "x86_64-unknown-linux-gnu"
 

@@ -29,6 +29,12 @@ echo 'int answer(); int main() { return answer() == 42 ? 0 : 1; }' > main.cpp
   "$here/test_reducer_smoke.cpp" -o cpu-reducer
 ./cpu-reducer
 
+for level in 0 2; do
+  "$OPENCILK_PATH/bin/clang++" -std=c++17 "-O$level" -fopencilk \
+    "$here/test_cpu_cilk_smoke.cpp" -o "cpu-cilk-O$level"
+  "./cpu-cilk-O$level"
+done
+
 for mode in fused unfused naive; do
   flags=()
   case "$mode" in

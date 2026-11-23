@@ -14,18 +14,26 @@ get_clang_resource_dir(CLANG_RESOURCE_INCDIR
 )
 
 set(out_files)
-function(copy_header_to_resource_dir file)
-  set(src ${CMAKE_CURRENT_SOURCE_DIR}/${file})
-  set(dst ${CLANG_RESOURCE_INCDIR}/${file})
-  add_custom_command(OUTPUT ${dst}
-    DEPENDS ${src}
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${src} ${dst}
-    COMMENT "Copying ${file}...")
-  list(APPEND out_files ${dst})
-  set(out_files ${out_files} PARENT_SCOPE)
+function(copy_header_to_resource_dir src file)
+  set(dst "${CLANG_RESOURCE_INCDIR}/${file}")
+  add_custom_command(OUTPUT "${dst}"
+    DEPENDS "${src}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${src}" "${dst}"
+    COMMENT "Copying ${file}..."
+    VERBATIM)
+  list(APPEND out_files "${dst}")
+  set(out_files "${out_files}" PARENT_SCOPE)
 endfunction(copy_header_to_resource_dir)
 
-copy_header_to_resource_dir(kitsune.h)
+copy_header_to_resource_dir("${CMAKE_CURRENT_SOURCE_DIR}/kitsune.h" kitsune.h)
+
+if(KITSUNE_OPENCILK_ENABLED)
+  set(cilkscale_header "${KITSUNE_INCLUDE_DIR}/cilk/cilkscale.h")
+  copy_header_to_resource_dir("${cilkscale_header}" cilk/cilkscale.h)
+  install(FILES "${cilkscale_header}"
+    DESTINATION "${CLANG_RESOURCE_SUBDIR}/include/cilk"
+    COMPONENT "kitsune-resource-headers")
+endif()
 
 add_custom_target("kitsune-resource-headers" ALL DEPENDS ${out_files})
 
@@ -42,5 +50,5 @@ install(DIRECTORY
 )
 
 install(FILES kitsune.h
-  DESTINATION ${CMAKE_INSTALL_PREFIX}/lib/clang/${LLVM_VERSION_MAJOR}/include
+  DESTINATION "${CLANG_RESOURCE_SUBDIR}/include"
   COMPONENT "kitsune-resource-headers")

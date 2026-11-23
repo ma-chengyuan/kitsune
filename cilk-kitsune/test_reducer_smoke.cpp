@@ -21,9 +21,14 @@ static void merge_pair(void *left, void *right) {
 }
 
 static bool check(Word n) {
-  Word cilk_reducer(zero_word, add_word) total = 19;
+  Word initial_total = 19;
+  Word cilk_reducer(zero_word, add_word) total = initial_total;
   Pair cilk_reducer(zero_pair, merge_pair) pair = {23, 31};
 #ifdef ZERA_SMOKE_CUDA
+  // Carry the CPU reducer's value across the implicit sync into the GPU loop.
+  cilk_for (Word i = 0; i < n; ++i)
+    total += 3;
+  initial_total += 3 * n;
   [[tapir::target("cuda")]]
 #endif
   cilk_for (Word i = 0; i < n; ++i) {
@@ -31,7 +36,7 @@ static bool check(Word n) {
     pair.sum += i * i;
     pair.parity ^= (i + 1) * 0x9e3779b97f4a7c15ULL;
   }
-  Word expected_total = 19;
+  Word expected_total = initial_total;
   Pair expected_pair{23, 31};
   for (Word i = 0; i < n; ++i) {
     expected_total += (i << 36) + 1;

@@ -5,7 +5,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 source "$root/cilk-kitsune/artifact-env.sh"
 export CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL:-4}
 
-if [[ $(realpath -m -- "$OPENCILK_PATH") == "$(realpath -m -- "$KITSUNE_PATH")" ]]; then
+if [[ -n ${OPENCILK_SOURCE:-} && $(realpath -m -- "$OPENCILK_PATH") == "$(realpath -m -- "$KITSUNE_PATH")" ]]; then
   printf 'Set OPENCILK_PATH and KITSUNE_PATH to separate toolchain prefixes.\n' >&2
   exit 1
 fi
@@ -18,8 +18,6 @@ if [[ -n ${OPENCILK_SOURCE:-} ]]; then
       exit 1
     fi
   done
-else
-  require_opencilk_frontend
 fi
 
 common=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON
@@ -35,7 +33,6 @@ if [[ -n ${OPENCILK_SOURCE:-} ]]; then
     '-DLLVM_ENABLE_RUNTIMES=cheetah;cilktools' -DLLVM_TARGETS_TO_BUILD=X86
   cmake --build "$OPENCILK_PATH" --target clang clang-resource-headers cheetah
   cmake --build "$OPENCILK_PATH/runtimes/runtimes-bins" --target cilk-headers cilktools-headers
-  require_opencilk_frontend
 fi
 
 cmake -S "$root/llvm" -B "$KITSUNE_PATH" "${common[@]}" \
@@ -44,3 +41,4 @@ cmake -S "$root/llvm" -B "$KITSUNE_PATH" "${common[@]}" \
   -DKITCUDA_ENABLE_NVTX=OFF "-DCUDAToolkit_ROOT=$CUDA_HOME"
 cmake --build "$KITSUNE_PATH" --target clang clang-resource-headers kitsune-resource-headers opt llvm-link kitcc kit++ \
   cheetah-copy-to-build-dir kitrt-copy-to-build-dir
+require_opencilk_frontend

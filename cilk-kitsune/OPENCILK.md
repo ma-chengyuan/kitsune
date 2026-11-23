@@ -1,6 +1,6 @@
-# External OpenCilk frontend
+# External OpenCilk reference frontend
 
-The hybrid driver uses OpenCilk Clang 19.1.7 to emit unlowered Tapir IR with
+The frozen two-compiler reference uses OpenCilk Clang 19.1.7 to emit unlowered Tapir IR with
 `-fopencilk -fopencilk-kitsune -ftapir=none`. Kitsune Clang 19.1.2 and its
 LLVM tools lower that IR and link the hybrid executable. The adapter takes
 the external OpenCilk build or install prefix as `OPENCILK_PATH`. For Stage 2
