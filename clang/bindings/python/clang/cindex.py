@@ -1384,6 +1384,9 @@ class CursorKind(BaseEnumeration):
     # OpenACC Compute Construct.
     OPEN_ACC_COMPUTE_DIRECTIVE = 320
 
+    # OpenACC Loop Construct.
+    OPEN_ACC_LOOP_CONSTRUCT = 321
+
     # Cilk cilk_spawn statement.
     CILK_SPAWN_STMT = 322
 
@@ -1401,6 +1404,12 @@ class CursorKind(BaseEnumeration):
 
     # Cilk cilk_for range statement.
     CILK_FOR_RANGE_STMT = 327
+
+    # Kitsune statements.
+    FORALL_STMT = 340
+    CXX_FORALL_RANGE_STMT = 341
+    SPAWN_STMT = 342
+    SYNC_STMT = 343
 
     ###
     # Other Kinds

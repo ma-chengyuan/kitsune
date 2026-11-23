@@ -6524,11 +6524,13 @@ unsigned clang_isReference(enum CXCursorKind K) {
 }
 
 unsigned clang_isExpression(enum CXCursorKind K) {
-  return K >= CXCursor_FirstExpr && K <= CXCursor_LastExpr;
+  return K == CXCursor_CilkSpawnExpr ||
+         (K >= CXCursor_FirstExpr && K <= CXCursor_LastExpr);
 }
 
 unsigned clang_isStatement(enum CXCursorKind K) {
-  return K >= CXCursor_FirstStmt && K <= CXCursor_LastStmt;
+  return K >= CXCursor_FirstStmt && K <= CXCursor_LastStmt &&
+         K != CXCursor_CilkSpawnExpr;
 }
 
 unsigned clang_isAttribute(enum CXCursorKind K) {

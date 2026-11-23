@@ -4,9 +4,11 @@ from clang.cindex import Config
 if "CLANG_LIBRARY_PATH" in os.environ:
     Config.set_library_path(os.environ["CLANG_LIBRARY_PATH"])
 
-from clang.cindex import CursorKind
+from clang.cindex import CursorKind, TypeKind
 
 import unittest
+
+from .util import get_cursor, get_tu
 
 
 class TestCursorKind(unittest.TestCase):
@@ -24,6 +26,29 @@ class TestCursorKind(unittest.TestCase):
         self.assertIn(CursorKind.MS_ASM_STMT, kinds)
         self.assertIn(CursorKind.MODULE_IMPORT_DECL, kinds)
         self.assertIn(CursorKind.TYPE_ALIAS_TEMPLATE_DECL, kinds)
+
+    def test_cilk_cursors(self):
+        tu = get_tu(
+            """
+            void identity(void *);
+            void reduce(void *, void *);
+            int work(void);
+            void update(void) {
+              int cilk_reducer(identity, reduce) reducer = _Cilk_spawn work();
+              _Cilk_sync;
+            }
+            """,
+            flags=["-fopencilk", "-ftapir=none"],
+        )
+        self.assertEqual(list(tu.diagnostics), [])
+        self.assertEqual(get_cursor(tu, "reducer").type.kind, TypeKind.HYPEROBJECT)
+
+        cursors = {cursor.kind: cursor for cursor in tu.cursor.walk_preorder()}
+        spawn_expr = cursors[CursorKind.CILK_SPAWN_EXPR]
+        self.assertTrue(spawn_expr.kind.is_expression())
+        self.assertFalse(spawn_expr.kind.is_statement())
+        self.assertEqual(spawn_expr.type.kind, TypeKind.INT)
+        self.assertIn(CursorKind.CILK_SYNC_STMT, cursors)
 
     def test_kind_groups(self):
         """Check that every kind classifies to exactly one group."""
