@@ -35,6 +35,7 @@ class StringRef;
 class AAManager;
 class TargetMachine;
 class ModuleSummaryIndex;
+struct CudaABIOptions;
 template <typename T> class IntrusiveRefCntPtr;
 namespace vfs {
 class FileSystem;
@@ -250,8 +251,10 @@ public:
   /// This pipeline is intended to be used early within
   /// buildTapirLoweringPipeline at Level > O0 or run on its own for debugging
   /// purposes.
-  ModulePassManager buildTapirLoopLoweringPipeline(OptimizationLevel Level,
-                                                   ThinOrFullLTOPhase Phase);
+  ModulePassManager
+  buildTapirLoopLoweringPipeline(OptimizationLevel Level,
+                                 ThinOrFullLTOPhase Phase,
+                                 const CudaABIOptions *CudaOptions = nullptr);
 
   /// Construct the pipeline for lowering Tapir constructs to a target parallel
   /// runtime.
@@ -259,8 +262,9 @@ public:
   /// This pipeline is intended to be used with the PerModuleDefault pipeline
   /// and various LTO pipelines to lower Tapir constructs.  This pipeline is
   /// expected to run late in the parent pipelines.
-  ModulePassManager buildTapirLoweringPipeline(OptimizationLevel Level,
-                                               ThinOrFullLTOPhase Phase);
+  ModulePassManager
+  buildTapirLoweringPipeline(OptimizationLevel Level, ThinOrFullLTOPhase Phase,
+                             const CudaABIOptions *CudaOptions = nullptr);
 
   /// Build a per-module default optimization pipeline.
   ///

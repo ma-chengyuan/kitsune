@@ -281,33 +281,6 @@ cl::opt<std::string> ClKitCudaRuntimeBCPath(
     cl::desc("Path to the bitcode file for the Kitsune CUDA runtime ABI"),
     cl::Hidden);
 
-// Take the NVIDIA CUDA 'sm_' architecture format and convert it into
-// the 'compute_' form.
-std::string virtualArchForCudaArch(StringRef Arch) {
-  // TODO: We've scaled back some from the full suite of Nvidia targets
-  // as we are going in assuming we will support only CUDA 11 or greater.
-  // We should probably raise an error for sm_2x and sm_3x targets.
-  LLVM_DEBUG(dbgs() << "cuabi: target architecture '" << Arch << "'.\n");
-  std::string VirtArch = llvm::StringSwitch<std::string>(Arch)
-                             .Case("sm_60", "compute_60") // Pascal
-                             .Case("sm_61", "compute_61") //
-                             .Case("sm_62", "compute_62") //
-                             .Case("sm_70", "compute_70") // Volta
-                             .Case("sm_72", "compute_72") //
-                             .Case("sm_75", "compute_75") // Turing
-                             .Case("sm_80", "compute_80") // Ampere
-                             .Case("sm_86", "compute_86") //
-                             .Case("sm_87", "compute_87") //
-                             .Case("sm_90", "compute_90") // Hopper
-                             .Default("unknown");
-  LLVM_DEBUG(dbgs() << "cuabi: compute architecture '" << VirtArch << "'.\n");
-  if (VirtArch == "unknown") {
-    errs() << "cuabi: unsupported cuda architecture target '" << Arch << "'.\n";
-    report_fatal_error("cuabi: fatal error -- unsupported target.");
-  }
-  return VirtArch;
-}
-
 std::string PTXVersionFromCudaVersion() {
   std::string CudaVersion;
   raw_string_ostream ss(CudaVersion);
@@ -880,9 +853,9 @@ void CudaLoop::postProcessOutline(TapirLoopInfo &TLI, TaskOutlineInfo &Out,
   KernelF->removeFnAttr("target-cpu");
   KernelF->removeFnAttr("target-features");
   KernelF->removeFnAttr("personality");
-  KernelF->addFnAttr("target-cpu", GPUArch);
+  KernelF->addFnAttr("target-cpu", TTarget->TargetArch);
   KernelF->addFnAttr("target-features",
-                     PTXVersionFromCudaVersion() + "," + GPUArch);
+                     PTXVersionFromCudaVersion() + "," + TTarget->TargetArch);
   NamedMDNode *Annotations =
       KernelModule.getOrInsertNamedMetadata("nvvm.annotations");
   SmallVector<Metadata *, 6> AV;
@@ -2700,18 +2673,31 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
   LLVM_DEBUG(dbgs() << "*** finished processing outlined call.\n");
 }
 
-CudaABI::CudaABI(Module &M)
-    : TapirTarget(M),
+CudaABI::CudaABI(Module &M, const CudaABIOptions *Options)
+    : TapirTarget(M), ABIOptions(Options ? *Options : CudaABIOptions{}),
+      TargetArch(GPUArch.getValue()),
       KernelModule(Twine(CUABI_PREFIX + sys::path::filename(M.getName())).str(),
                    M.getContext()) {
+  if (!ClKitCudaRuntimeBCPath.empty())
+    ABIOptions.RuntimeBCPath = ClKitCudaRuntimeBCPath;
+  if (ABIOptions.LibDevicePath.empty())
+    ABIOptions.LibDevicePath = KITSUNE_CUDA_LIBDEVICE_BC;
+  if (ABIOptions.PtxasPath.empty())
+    ABIOptions.PtxasPath = KITSUNE_CUDA_PTXAS;
+  if (ABIOptions.FatbinaryPath.empty())
+    ABIOptions.FatbinaryPath = KITSUNE_CUDA_FATBINARY;
+  if (EmbedPTXInFatbinaries.getNumOccurrences())
+    ABIOptions.EmbedPTX = EmbedPTXInFatbinaries;
 
   // A helping hand for invocation of the transform from a JIT-driven
   // environment where it can be a bit painful to get to
   std::optional<std::string> envTarget = sys::Process::GetEnv("CUDAABI_TARGET");
-  if (envTarget) {
+  if (envTarget && (!Options || !GPUArch.getNumOccurrences())) {
     LLVM_DEBUG(dbgs() << "cuabi: target set via environment '"
                       << envTarget.value() << "'.\n");
-    GPUArch.setInitialValue(envTarget.value());
+    TargetArch = *envTarget;
+    if (!Options)
+      GPUArch.setInitialValue(*envTarget);
   }
 
   std::optional<std::string> ThreadsPBVar =
@@ -2752,7 +2738,7 @@ CudaABI::CudaABI(Module &M)
   }
 
   PTXTargetMachine = PTXTarget->createTargetMachine(
-      TT.getTriple(), GPUArch, PTXVersionStr.c_str(), TargetOptions(),
+      TT.getTriple(), TargetArch, PTXVersionStr.c_str(), TargetOptions(),
       Reloc::PIC_, CodeModel::Large, CodeGenOptLevel::Aggressive);
 
   KernelModule.setTargetTriple(TT.str());
@@ -2775,20 +2761,8 @@ std::unique_ptr<Module> &CudaABI::getLibDeviceModule() {
   if (not LibDeviceModule) {
     LLVMContext &Ctx = KernelModule.getContext();
     llvm::SMDiagnostic SMD;
-    llvm::errs() << "libdevice: " << KITSUNE_CUDA_LIBDEVICE_BC << "\n";
-    // KITSUNE FIXME: It might be useful during development to override the
-    // libdevice.10.bc function. We could do this with a command-line argument
-    // that gets passed to this transform.
-    // std::optional<std::string> CudaPath = sys::Process::FindInEnvPath(
-    //     "CUDA_HOME", "nvvm/libdevice/libdevice.10.bc");
-    // if (!CudaPath) {
-    //   CudaPath = sys::Process::FindInEnvPath("CUDA_PATH",
-    //                                          "nvvm/libdevice/libdevice.10.bc");
-    //   if (!CudaPath)
-    //     report_fatal_error("Unable to load cuda libdevice.10.bc!");
-    // }
-
-    llvm::StringRef LibDeviceBCFile = KITSUNE_CUDA_LIBDEVICE_BC;
+    StringRef LibDeviceBCFile = ABIOptions.LibDevicePath;
+    llvm::errs() << "libdevice: " << LibDeviceBCFile << "\n";
     LibDeviceModule = parseIRFile(LibDeviceBCFile, SMD, Ctx);
     if (not LibDeviceModule)
       report_fatal_error(llvm::StringRef("Failed to parse: ") +
@@ -2880,7 +2854,7 @@ CudaABIOutputFile CudaABI::assemblePTXFile(CudaABIOutputFile &PTXFile) {
                     << "'.\n");
 
   std::error_code EC;
-  llvm::StringRef PTXASExe = KITSUNE_CUDA_PTXAS;
+  StringRef PTXASExe = ABIOptions.PtxasPath;
   SmallString<255> AsmFileName(PTXFile->getFilename());
   sys::path::replace_extension(AsmFileName, ".s");
   std::unique_ptr<ToolOutputFile> AsmFile;
@@ -2900,7 +2874,7 @@ CudaABIOutputFile CudaABI::assemblePTXFile(CudaABIOutputFile &PTXFile) {
   // --gpu-name <gpu name>: Specify name of GPU to generate code for.
   // (e.g., 'sm_70','sm_72','sm_75','sm_80','sm_86', 'sm_87')
   PTXASArgList.push_back("--gpu-name"); // target gpu architecture.
-  PTXASArgList.push_back(GPUArch.c_str());
+  PTXASArgList.push_back(TargetArch.c_str());
 
   // For now let's always warn if we spill registers...
   PTXASArgList.push_back("--warn-on-spills");
@@ -3209,7 +3183,7 @@ CudaABIOutputFile CudaABI::createFatbinaryFile(CudaABIOutputFile &AsmFile) {
   //   report_fatal_error("'fatbinary' not found. "
   //                      "Is a CUDA installation in your path?");
 
-  llvm::StringRef FatbinaryExe = KITSUNE_CUDA_FATBINARY;
+  StringRef FatbinaryExe = ABIOptions.FatbinaryPath;
   opt::ArgStringList FatbinaryArgList;
   FatbinaryArgList.push_back(FatbinaryExe.data());
   FatbinaryArgList.push_back("--64");
@@ -3217,17 +3191,19 @@ CudaABIOutputFile CudaABI::createFatbinaryFile(CudaABIOutputFile &AsmFile) {
   FatbinaryArgList.push_back(FatbinFilename.c_str());
 
   std::string FatbinaryImgArgs =
-      "--image=profile=" + GPUArch + ",file=" + AsmFile->getFilename().str();
+      "--image=profile=" + TargetArch + ",file=" + AsmFile->getFilename().str();
   FatbinaryArgList.push_back(FatbinaryImgArgs.c_str());
 
   std::list<std::string> PTXFilesArgList;
-  if (EmbedPTXInFatbinaries) {
-    std::string VArchStr = virtualArchForCudaArch(GPUArch);
-    if (VArchStr == "unknown")
-      report_fatal_error("cuabi: no virtual target for given gpuarch '" +
-                         StringRef(GPUArch) + "'!");
+  if (ABIOptions.EmbedPTX) {
+    StringRef VirtualArch = getTapirCudaVirtualArch(TargetArch);
+    if (VirtualArch.empty()) {
+      errs() << "cuabi: unsupported cuda architecture target '" << TargetArch
+             << "'.\n";
+      report_fatal_error("cuabi: fatal error -- unsupported target.");
+    }
 
-    std::string PTXFixedArgStr = "--image=profile=" + VArchStr + ",file=";
+    std::string PTXFixedArgStr = ("--image=profile=" + VirtualArch + ",file=").str();
     for (auto &PTXFile : ModulePTXFileList) {
       std::string arg = PTXFixedArgStr + PTXFile;
       std::list<std::string>::const_iterator it;
@@ -3265,7 +3241,7 @@ CudaABIOutputFile CudaABI::createFatbinaryFile(CudaABIOutputFile &AsmFile) {
     // environment -- currently assuming it matches standard practices...
     report_fatal_error("'fatbinary' error:" + StringRef(ErrMsg));
 
-  if (EmbedPTXInFatbinaries) {
+  if (ABIOptions.EmbedPTX) {
     std::list<std::string>::iterator it = PTXFilesArgList.begin();
     while (it != PTXFilesArgList.end()) {
       PTXFilesArgList.erase(it++);
@@ -3656,17 +3632,17 @@ CudaABIOutputFile CudaABI::generatePTX() {
     // Parse the bitcode file.  This call imports structure definitions, but not
     // function definitions.
     if (std::unique_ptr<Module> ExternalModule =
-            parseIRFile(ClKitCudaRuntimeBCPath, SMD, C)) {
+            parseIRFile(ABIOptions.RuntimeBCPath, SMD, C)) {
       // Link the external module into the current module, copying over global
       // values.
       bool Fail = Linker::linkModules(KernelModule, std::move(ExternalModule),
                                       Linker::Flags::LinkOnlyNeeded);
       if (Fail)
         C.emitError("CudaABI: Failed to link bitcode ABI file: " +
-                    Twine(ClKitCudaRuntimeBCPath));
+                    Twine(ABIOptions.RuntimeBCPath));
     } else {
       C.emitError("CudaABI: Failed to parse bitcode ABI file: " +
-                  Twine(ClKitCudaRuntimeBCPath));
+                  Twine(ABIOptions.RuntimeBCPath));
     }
   }
 

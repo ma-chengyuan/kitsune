@@ -14,6 +14,7 @@
 #define TAPIR_TARGET_IDS_H_
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -37,6 +38,22 @@ enum class TapirTargetID {
 // string representation that is compatible with the -ftapir argument used in
 // clang.
 raw_ostream &operator<<(raw_ostream &os, const TapirTargetID &Target);
+
+/// Return the PTX profile for an architecture supported by CUDA Tapir.
+inline StringRef getTapirCudaVirtualArch(StringRef Arch) {
+  return StringSwitch<StringRef>(Arch)
+      .Case("sm_60", "compute_60")
+      .Case("sm_61", "compute_61")
+      .Case("sm_62", "compute_62")
+      .Case("sm_70", "compute_70")
+      .Case("sm_72", "compute_72")
+      .Case("sm_75", "compute_75")
+      .Case("sm_80", "compute_80")
+      .Case("sm_86", "compute_86")
+      .Case("sm_87", "compute_87")
+      .Case("sm_90", "compute_90")
+      .Default({});
+}
 
 enum class TapirNVArchTargetID {
   SM_50, // TODO: Remove depcreated targets based on latest CUDA releases.
@@ -107,6 +124,14 @@ protected:
   OpenCilkABIOptions *cloneImpl() const {
     return new OpenCilkABIOptions(RuntimeBCPath);
   }
+};
+
+struct CudaABIOptions {
+  std::string RuntimeBCPath;
+  std::string LibDevicePath;
+  std::string PtxasPath;
+  std::string FatbinaryPath;
+  bool EmbedPTX = false;
 };
 
 } // end namespace llvm

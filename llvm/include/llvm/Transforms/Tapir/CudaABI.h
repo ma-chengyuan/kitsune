@@ -72,7 +72,7 @@ class CudaABI : public TapirTarget {
   friend class CudaLoop;
 
 public:
-  CudaABI(Module &M);
+  CudaABI(Module &M, const CudaABIOptions *Options = nullptr);
   ~CudaABI();
 
   Value *lowerGrainsizeCall(CallInst *GrainsizeCall) override final;
@@ -175,6 +175,8 @@ public:
     Function *createCtor(GlobalVariable *Fatbinary, GlobalVariable *Wrapper);
     Function *createDtor(GlobalVariable *FBHandle);
 
+    CudaABIOptions ABIOptions;
+    std::string TargetArch;
     std::unique_ptr<Module> LibDeviceModule;
 
     typedef std::list<std::string> StringListTy;

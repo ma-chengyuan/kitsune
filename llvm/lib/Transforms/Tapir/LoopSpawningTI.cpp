@@ -488,9 +488,10 @@ public:
       Function &F, DominatorTree &DT, LoopInfo &LI, TaskInfo &TI,
       ScalarEvolution &SE, AssumptionCache &AC, TargetTransformInfo &TTI,
       TapirTargetID Target, OptimizationRemarkEmitter &ORE,
-      std::map<TapirTargetID, std::shared_ptr<TapirTarget>> &Targets)
+      std::map<TapirTargetID, std::shared_ptr<TapirTarget>> &Targets,
+      const CudaABIOptions *CudaOptions = nullptr)
       : F(F), DT(DT), LI(LI), TI(TI), SE(SE), AC(AC), TTI(TTI), ORE(ORE),
-        Targets(Targets) {}
+        Targets(Targets), CudaOptions(CudaOptions) {}
 
   ~LoopSpawningImpl() {
     for (TapirLoopInfo *TL : TapirLoops)
@@ -606,6 +607,7 @@ private:
   TargetTransformInfo &TTI;
   OptimizationRemarkEmitter &ORE;
   std::map<TapirTargetID, std::shared_ptr<TapirTarget>> &Targets;
+  const CudaABIOptions *CudaOptions;
 
   std::vector<TapirLoopInfo *> TapirLoops;
   DenseMap<Task *, TapirLoopInfo *> TaskToTapirLoop;
@@ -991,7 +993,7 @@ LoopOutlineProcessor *LoopSpawningImpl::getOutlineProcessor(TapirLoopInfo *TL) {
   // different targets...
   if (Targets.find(TLTID) == Targets.end()) {
     Targets[TLTID] = std::shared_ptr<TapirTarget>(
-        getTapirTargetFromID(M, TLTID));
+        getTapirTargetFromID(M, TLTID, CudaOptions));
   }
 
   // Allow the Tapir target to define a custom loop-outline processor.
@@ -1846,7 +1848,8 @@ PreservedAnalyses LoopSpawningPass::run(Module &M, ModuleAnalysisManager &AM) {
     std::shared_ptr<TapirTarget> Target(getTapirTargetFromID(M, TargetID));
     HasParallelism |=
         LoopSpawningImpl(*F, GetDT(*F), GetLI(*F), GetTI(*F), GetSE(*F),
-                         GetAC(*F), GetTTI(*F), TargetID, GetORE(*F), Targets)
+                         GetAC(*F), GetTTI(*F), TargetID, GetORE(*F), Targets,
+                         CudaOptions ? &*CudaOptions : nullptr)
             .run();
   }
 

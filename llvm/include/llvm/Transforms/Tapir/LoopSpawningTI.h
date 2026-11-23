@@ -14,11 +14,22 @@
 #define LLVM_TRANSFORMS_TAPIR_LOOPSPAWNING_H
 
 #include "llvm/IR/PassManager.h"
+#include "llvm/Transforms/Tapir/TapirTargetIDs.h"
+#include <optional>
 
 namespace llvm {
 
 /// The LoopSpawning Pass.
-struct LoopSpawningPass : public PassInfoMixin<LoopSpawningPass> {
+class LoopSpawningPass : public PassInfoMixin<LoopSpawningPass> {
+  std::optional<CudaABIOptions> CudaOptions;
+
+public:
+  LoopSpawningPass() = default;
+  explicit LoopSpawningPass(const CudaABIOptions *Options) {
+    if (Options)
+      CudaOptions = *Options;
+  }
+
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
 };
 

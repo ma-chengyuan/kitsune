@@ -1634,7 +1634,8 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
 
 ModulePassManager
 PassBuilder::buildTapirLoopLoweringPipeline(OptimizationLevel Level,
-                                            ThinOrFullLTOPhase Phase) {
+                                            ThinOrFullLTOPhase Phase,
+                                            const CudaABIOptions *CudaOptions) {
   ModulePassManager MPM;
 
   LoopPassManager LPM1, LPM2;
@@ -1665,7 +1666,7 @@ PassBuilder::buildTapirLoopLoweringPipeline(OptimizationLevel Level,
   MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
 
   // Outline Tapir loops as needed.
-  MPM.addPass(LoopSpawningPass());
+  MPM.addPass(LoopSpawningPass(CudaOptions));
   if (VerifyTapirLowering)
     MPM.addPass(VerifierPass());
 
@@ -1681,7 +1682,8 @@ PassBuilder::buildTapirLoopLoweringPipeline(OptimizationLevel Level,
 
 ModulePassManager
 PassBuilder::buildTapirLoweringPipeline(OptimizationLevel Level,
-                                        ThinOrFullLTOPhase Phase) {
+                                        ThinOrFullLTOPhase Phase,
+                                        const CudaABIOptions *CudaOptions) {
   ModulePassManager MPM;
 
   if (Level == OptimizationLevel::O0) {
@@ -1704,7 +1706,7 @@ PassBuilder::buildTapirLoweringPipeline(OptimizationLevel Level,
   }
 
   // Lower Tapir loops
-  MPM.addPass(buildTapirLoopLoweringPipeline(Level, Phase));
+  MPM.addPass(buildTapirLoopLoweringPipeline(Level, Phase, CudaOptions));
 
   // Add passes to run just after Tapir loops are processed.
   invokeTapirLoopEndEPCallbacks(MPM, Level);

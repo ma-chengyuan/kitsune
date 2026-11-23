@@ -44,7 +44,8 @@ using namespace llvm;
 static const char TimerGroupName[] = DEBUG_TYPE;
 static const char TimerGroupDescription[] = "Tapir lowering";
 
-TapirTarget *llvm::getTapirTargetFromID(Module &M, TapirTargetID ID) {
+TapirTarget *llvm::getTapirTargetFromID(Module &M, TapirTargetID ID,
+                                      const CudaABIOptions *CudaOptions) {
   // Yes, this is absolutely hideous. We should try to find a nicer way than
   // this horrendous conditionally compiled mess!
   switch (ID) {
@@ -55,7 +56,7 @@ TapirTarget *llvm::getTapirTargetFromID(Module &M, TapirTargetID ID) {
 
 #if KITSUNE_CUDA_ENABLED
   case TapirTargetID::Cuda:
-    return new CudaABI(M);
+    return new CudaABI(M, CudaOptions);
 #endif // KITSUNE_CUDA_ENABLED
 
 #if KITSUNE_HIP_ENABLED

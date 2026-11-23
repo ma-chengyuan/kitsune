@@ -476,7 +476,8 @@ public:
 };
 
 /// Generate a TapirTarget object for the specified TapirTargetID.
-TapirTarget *getTapirTargetFromID(Module &M, TapirTargetID TargetID);
+TapirTarget *getTapirTargetFromID(Module &M, TapirTargetID TargetID,
+                                 const CudaABIOptions *CudaOptions = nullptr);
 
 /// Find all inputs to tasks within a function \p F, including nested tasks.
 TaskValueSetMap findAllTaskInputs(Function &F, const DominatorTree &DT,
