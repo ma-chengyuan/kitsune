@@ -41,7 +41,13 @@ Use `clang++ -O2 -fzera` to compile and link a mixed program. For separate compi
 
 Use `clang++ -fopencilk` for a native CPU Cilk executable and add `-static` for a static link. The legacy `-fcilkplus` spelling supports parsing and Tapir IR emission. For native code with that spelling, select a lowering target explicitly, such as `-ftapir=opencilk` or `-ftapir=serial`.
 
-The smoke script checks CPU and GPU reductions against a serial reference, checks CUDA lowering and execution, and exercises a GPU loop inside a CPU Cilk loop. It writes intermediate IR, logs and executables under `$BUILD_DIR/smoke/`. GPU tests use `sm_80` with embedded PTX by default. Set `CUDA_ARCH` to override the target.
+The smoke script checks CPU and GPU reductions against a serial reference, checks CUDA lowering and execution, and exercises a GPU loop inside a CPU Cilk loop. It also checks that a linked C++ shared library obtains CUDA managed memory from `new[]` when the executable uses `--exclude-libs,ALL`. It writes intermediate IR, logs and executables under `$BUILD_DIR/smoke/`. GPU tests use `sm_80` with embedded PTX by default. Set `CUDA_ARCH` to override the target.
+
+On machines with two CUDA toolkits whose runtime libraries have different major versions, the following check verifies the executable's CUDA dependency even when the second toolkit comes first on the project's library search path. Pass the toolkit used to build the compiler first.
+
+```sh
+cilk-kitsune/smoke-cuda-selection.sh "$KITSUNE_PATH/bin/clang++" "$CUDA_HOME" /usr/local/cuda-13.0
+```
 
 For the batched NTT, use the paper benchmark checkout at `224660e8e24d`. In a clean checkout of `ingonyama-zk/icicle-snark` at `bf00385db190`, apply `cilk-kitsune/icicle-snark-bf00385-headers.patch` from this repository. It preserves the three modified Icicle headers used in the evaluation environment. Then run
 

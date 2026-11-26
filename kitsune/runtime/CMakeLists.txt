@@ -105,15 +105,16 @@ if (KITSUNE_CUDA_ENABLED)
   if(KITSUNE_OPENCILK_ENABLED)
     # Reuse the legacy adapter's C++ allocation replacements. They call only
     # kitrt's C ABI, including when a C driver links the Zera application.
-    add_library(zera_alloc STATIC
+    add_library(zera_alloc OBJECT
       ${CMAKE_CURRENT_SOURCE_DIR}/../../cilk-kitsune/kitcuda_malloc.cpp)
     target_compile_features(zera_alloc PRIVATE cxx_std_17)
     target_compile_options(zera_alloc PRIVATE -fno-exceptions)
     set_target_properties(zera_alloc PROPERTIES
-      ARCHIVE_OUTPUT_DIRECTORY ${CLANG_RESOURCE_INTDIR}/lib
       INTERPROCEDURAL_OPTIMIZATION OFF
       POSITION_INDEPENDENT_CODE ON)
-    install(TARGETS zera_alloc ARCHIVE DESTINATION ${CLANG_RESOURCE_SUBDIR}/lib)
+    install(FILES $<TARGET_OBJECTS:zera_alloc>
+      DESTINATION ${CLANG_RESOURCE_SUBDIR}/lib
+      RENAME zera_alloc.o)
   endif()
 
   target_sources(${KITRT} PUBLIC

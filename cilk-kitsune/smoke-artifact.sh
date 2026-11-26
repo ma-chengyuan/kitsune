@@ -24,6 +24,14 @@ echo 'int answer() { return 42; }' > answer.cpp
 echo 'int answer(); int main() { return answer() == 42 ? 0 : 1; }' > main.cpp
 "${mixed[@]}" -O2 -std=c++17 -c answer.cpp -o answer.o
 "${mixed[@]}" -O2 -std=c++17 -c main.cpp -o main.o
+
+# An ordinary C++ shared library must use the executable's managed allocator,
+# even when the final Zera link hides symbols from static archives.
+"$clangxx" -O2 -std=c++17 -shared -fPIC -Wl,-soname,libshared-allocation.so \
+  "$here/test_shared_allocation/library.cpp" -o libshared-allocation.so
+"$clangxx" -O2 -std=c++17 -I"$CUDA_HOME/include" -c \
+  "$here/test_shared_allocation/main.cpp" -o shared-allocation.o
+
 linkers=(default)
 for linker in bfd lld; do
   linker_path=$("$clangxx" "-print-prog-name=ld.$linker")
@@ -41,6 +49,9 @@ for linker in "${linkers[@]}"; do
     "${mixed[@]}" -O2 -std=c++17 "${link_flags[@]}" "$input" answer.o -o "$name"
     LD_BIND_NOW=1 "./$name"
   done
+  "${mixed[@]}" "${link_flags[@]}" -Wl,--exclude-libs,ALL '-Wl,-rpath,$ORIGIN' \
+    shared-allocation.o ./libshared-allocation.so -o "shared-allocation-$linker"
+  LD_BIND_NOW=1 "./shared-allocation-$linker"
 done
 
 "$clangxx" -std=c++17 -O2 -fopencilk \

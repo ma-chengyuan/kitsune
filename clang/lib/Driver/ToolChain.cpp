@@ -1794,42 +1794,40 @@ void ToolChain::AddZeraRuntimeArgs(const ArgList &Args,
 void ToolChain::AddZeraLinkerArgs(const ArgList &Args,
                                   ArgStringList &CmdArgs) const {
   std::string LibDir = concat(D.ResourceDir, "lib");
-  std::string Shim = concat(LibDir, "libzera_alloc.a");
+  std::string Shim = concat(LibDir, "zera_alloc.o");
   std::string KitRT = concat(LibDir, "libkitrt.so");
 
-  // Load replacement new/delete even when used only from a linked shared
-  // library. Scope whole-archive to the shim.
-  if (checkZeraFile(*this, "allocation shim", Shim)) {
-    CmdArgs.push_back("--push-state");
-    CmdArgs.push_back("--whole-archive");
+  // Link the replacements as an object so references from shared libraries
+  // can bind to them even under --exclude-libs=ALL.
+  if (checkZeraFile(*this, "allocation shim", Shim))
     CmdArgs.push_back(Args.MakeArgString(Shim));
-    CmdArgs.push_back("--pop-state");
-  }
   if (checkZeraFile(*this, "Kitsune runtime library", KitRT))
     CmdArgs.push_back(Args.MakeArgString(KitRT));
 
   const Arg *CudaPath = Args.getLastArg(options::OPT_cuda_path_EQ);
-  std::string CudaLibDir = CudaPath ? concat(CudaPath->getValue(), "lib64")
-                                    : KITSUNE_CUDA_LIBRARY_DIR;
-  if (!CudaLibDir.empty()) {
-    CmdArgs.push_back("-L");
-    CmdArgs.push_back(Args.MakeArgString(CudaLibDir));
-  }
+  std::string CudaRuntime =
+      CudaPath ? concat(CudaPath->getValue(), "lib64", "libcudart.so")
+               : KITSUNE_CUDA_LIB_CUDART;
+  if (!checkZeraFile(*this, "CUDA runtime library", CudaRuntime))
+    return;
+
+  StringRef CudaLibDir = llvm::sys::path::parent_path(CudaRuntime);
+  CmdArgs.push_back("-L");
+  CmdArgs.push_back(Args.MakeArgString(CudaLibDir));
   // Keep CUDA's runtime as a direct dependency, so this link's runtime
-  // search path also applies when kitrt uses it.
+  // search path also applies when kitrt uses it. Pass its path to prevent
+  // other library search directories from overriding the selected toolkit.
   CmdArgs.push_back("--push-state");
   CmdArgs.push_back("--no-as-needed");
-  CmdArgs.push_back("-lcudart");
+  CmdArgs.push_back(Args.MakeArgString(CudaRuntime));
   CmdArgs.push_back("--pop-state");
 
   if (Args.hasFlag(options::OPT_frtlib_add_rpath,
                    options::OPT_fno_rtlib_add_rpath, true)) {
     CmdArgs.push_back("-rpath");
     CmdArgs.push_back(Args.MakeArgString(LibDir));
-    if (!CudaLibDir.empty()) {
-      CmdArgs.push_back("-rpath");
-      CmdArgs.push_back(Args.MakeArgString(CudaLibDir));
-    }
+    CmdArgs.push_back("-rpath");
+    CmdArgs.push_back(Args.MakeArgString(CudaLibDir));
   }
 }
 

@@ -1,11 +1,12 @@
 // REQUIRES: zera
 // RUN: rm -rf %t
-// RUN: mkdir -p %t/relocated/lib/x86_64-unknown-linux-gnu %t/cuda/bin %t/cuda/nvvm/libdevice
+// RUN: mkdir -p %t/relocated/lib/x86_64-unknown-linux-gnu %t/cuda/bin %t/cuda/lib64 %t/cuda/nvvm/libdevice
 // RUN: touch %t/relocated/lib/x86_64-unknown-linux-gnu/libopencilk-abi.bc
 // RUN: touch %t/relocated/lib/x86_64-unknown-linux-gnu/libopencilk.so
 // RUN: touch %t/relocated/lib/x86_64-unknown-linux-gnu/libopencilk-personality-cpp.so
-// RUN: touch %t/relocated/lib/kitcuda.bc %t/relocated/lib/libkitrt.so %t/relocated/lib/libzera_alloc.a
+// RUN: touch %t/relocated/lib/kitcuda.bc %t/relocated/lib/libkitrt.so %t/relocated/lib/zera_alloc.o
 // RUN: touch %t/cuda/bin/ptxas %t/cuda/bin/fatbinary %t/cuda/nvvm/libdevice/libdevice.10.bc
+// RUN: touch %t/cuda/lib64/libcudart.so
 // RUN: touch %t/existing.o
 
 // RUN: env CUDAABI_TARGET=sm_00 %clangxx --target=x86_64-unknown-linux-gnu -### -fzera -c \
@@ -24,7 +25,7 @@
 // CODEGEN-SAME: "-mllvm" "--cuabi-arch=sm_80"
 // CODEGEN-SAME: "-mllvm" "--cuabi-dont-fuse-reducers"
 // CODEGEN-SAME: "-mllvm" "--cuabi-naive-atomics"
-// CODEGEN-NOT: libzera_alloc
+// CODEGEN-NOT: zera_alloc.o
 
 // RUN: env CUDAABI_TARGET=sm_00 %clangxx --target=x86_64-unknown-linux-gnu -### -fzera -c \
 // RUN:   -resource-dir %t/relocated --cuda-path=%t/cuda \
@@ -39,20 +40,27 @@
 // SOURCE-SAME: "-debug-info-kind=constructor"
 // SOURCE-SAME: "-O2"
 // AS-NEEDED: "--as-needed"
+// AS-NEEDED-SAME: "--exclude-libs" "ALL"
 // LINK: "{{[^"]*}}/existing.o"
 // LINK-SAME: "[[LIBDIR:[^"]*]]/x86_64-unknown-linux-gnu/libopencilk-personality-cpp.so"
 // LINK-SAME: "--push-state" "--no-as-needed" "[[LIBDIR]]/x86_64-unknown-linux-gnu/libopencilk.so" "--pop-state"
 // LINK-SAME: "-rpath" "[[LIBDIR]]/x86_64-unknown-linux-gnu"
-// LINK-SAME: "--push-state" "--whole-archive" "[[LIBDIR]]/libzera_alloc.a" "--pop-state"
+// LINK-SAME: "[[LIBDIR]]/zera_alloc.o"
 // LINK-SAME: "[[LIBDIR]]/libkitrt.so"
 // LINK-SAME: "-L" "[[CUDA:[^"]*]]/cuda/lib64"
-// LINK-SAME: "--push-state" "--no-as-needed" "-lcudart" "--pop-state"
+// LINK-SAME: "--push-state" "--no-as-needed" "[[CUDA]]/cuda/lib64/libcudart.so" "--pop-state"
 // LINK-SAME: "-rpath" "[[LIBDIR]]" "-rpath" "[[CUDA]]/cuda/lib64"
 
 // RUN: rm %t/relocated/lib/kitcuda.bc
 // RUN: %clangxx --target=x86_64-unknown-linux-gnu -### -fzera -O0 \
-// RUN:   -resource-dir %t/relocated --cuda-path=%t/cuda -Wl,--as-needed %t/existing.o 2>&1 \
-// RUN:   | FileCheck %s --check-prefixes=AS-NEEDED,LINK --implicit-check-not='error:' --implicit-check-not=-cc1
+// RUN:   -resource-dir %t/relocated --cuda-path=%t/cuda -Wl,--as-needed,--exclude-libs,ALL %t/existing.o 2>&1 \
+// RUN:   | FileCheck %s --check-prefixes=AS-NEEDED,LINK --implicit-check-not='error:' \
+// RUN:   --implicit-check-not=-cc1 --implicit-check-not=--whole-archive
+
+// RUN: not %clangxx --target=x86_64-unknown-linux-gnu -### -fzera \
+// RUN:   -resource-dir %t/relocated --cuda-path=%t/absent -L%t/cuda/lib64 %t/existing.o 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=MISSING-CUDART --implicit-check-not=-lcudart
+// MISSING-CUDART: error: cannot find '-fzera' CUDA runtime library: '{{[^']*}}/absent/lib64/libcudart.so'
 
 // RUN: %clangxx --target=x86_64-unknown-linux-gnu -fzera -E -dM \
 // RUN:   -resource-dir %t/absent %s | FileCheck %s --check-prefix=CILK
@@ -62,11 +70,11 @@
 // RUN:   -resource-dir %t/absent --cuda-path=%t/absent %s 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=PREPROCESS --implicit-check-not='warning:' \
 // RUN:   --implicit-check-not='error:' --implicit-check-not=--opencilk-abi-bitcode \
-// RUN:   --implicit-check-not=--kitcuda-abi-bitcode --implicit-check-not=libzera_alloc
+// RUN:   --implicit-check-not=--kitcuda-abi-bitcode --implicit-check-not=zera_alloc.o
 // RUN: %clangxx --target=x86_64-unknown-linux-gnu -### -fzera -fsyntax-only \
 // RUN:   -resource-dir %t/absent %s 2>&1 | FileCheck %s --check-prefix=SYNTAX \
 // RUN:   --implicit-check-not='error:' --implicit-check-not=--opencilk-abi-bitcode \
-// RUN:   --implicit-check-not=--kitcuda-abi-bitcode --implicit-check-not=libzera_alloc
+// RUN:   --implicit-check-not=--kitcuda-abi-bitcode --implicit-check-not=zera_alloc.o
 // PREPROCESS: "-cc1"
 // PREPROCESS-SAME: "-E"
 // PREPROCESS-SAME: "-O0"
@@ -78,7 +86,7 @@
 // RUN: %clangxx --target=x86_64-unknown-linux-gnu -### -fopencilk \
 // RUN:   -resource-dir %t/relocated %s 2>&1 | FileCheck %s --check-prefix=CPU \
 // RUN:   --implicit-check-not='error:' --implicit-check-not=--kitcuda-abi-bitcode \
-// RUN:   --implicit-check-not=libkitrt --implicit-check-not=libzera_alloc
+// RUN:   --implicit-check-not=libkitrt --implicit-check-not=zera_alloc.o
 // CPU: "-cc1"
 // CPU-SAME: "-fopencilk"
 // CPU-SAME: "--opencilk-abi-bitcode={{[^"]*}}/relocated/lib/x86_64-unknown-linux-gnu/libopencilk-abi.bc"
