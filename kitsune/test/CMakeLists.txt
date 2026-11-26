@@ -38,6 +38,7 @@ set(KITSUNE_TEST_PARAMS
 list(APPEND KITSUNE_TEST_DEPS
   ${KITSUNE_C_FRONTEND}
   ${KITSUNE_CXX_FRONTEND}
+  kitsune-resource-headers
   clang
   llvm-config
   FileCheck count not
@@ -50,6 +51,10 @@ endif()
 
 if(KITSUNE_CUDA_ENABLED)
   list(APPEND KITSUNE_TEST_DEPS kitrt-copy-to-build-dir)
+endif()
+
+if(KITSUNE_OPENCILK_ENABLED)
+  list(APPEND KITSUNE_TEST_DEPS cheetah-copy-to-build-dir)
 endif()
 
 add_custom_target(kitsune-test-depends DEPENDS ${KITSUNE_TEST_DEPS})
